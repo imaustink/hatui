@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import { HassEntity, HassConfig, HassArea, HassDevice, HassStateChange } from './types';
+import { HassEntity, HassConfig, HassArea, HassDevice, HassStateChange, HassEntityRegistryEntry } from './types';
 import { EventEmitter } from 'events';
 
 interface HassMessage {
@@ -16,6 +16,7 @@ export class HassClient extends EventEmitter {
   public entities: Map<string, HassEntity> = new Map();
   public areas: HassArea[] = [];
   public devices: HassDevice[] = [];
+  public entityRegistry: HassEntityRegistryEntry[] = [];
   public connected = false;
 
   constructor(private config: HassConfig) {
@@ -152,6 +153,15 @@ export class HassClient extends EventEmitter {
       this.devices = [];
     }
 
+    // Load entity registry (entity → area / device mapping)
+    try {
+      this.entityRegistry = await this.request<HassEntityRegistryEntry[]>({
+        type: 'config/entity_registry/list',
+      });
+    } catch {
+      this.entityRegistry = [];
+    }
+
     // Subscribe to state changes
     this.subscribeId = this.nextId();
     this.send({
@@ -178,8 +188,60 @@ export class HassClient extends EventEmitter {
     }
   }
 
+  async renameDevice(deviceId: string, nameByUser: string | null): Promise<void> {
+    await this.request({
+      type: 'config/device_registry/update',
+      device_id: deviceId,
+      name_by_user: nameByUser,
+    });
+    const idx = this.devices.findIndex((d) => d.id === deviceId);
+    if (idx >= 0) {
+      this.devices[idx] = { ...this.devices[idx], name_by_user: nameByUser };
+    }
+  }
+
+  async assignDeviceArea(deviceId: string, areaId: string | null): Promise<void> {
+    await this.request({
+      type: 'config/device_registry/update',
+      device_id: deviceId,
+      area_id: areaId,
+    });
+    const idx = this.devices.findIndex((d) => d.id === deviceId);
+    if (idx >= 0) {
+      this.devices[idx] = { ...this.devices[idx], area_id: areaId };
+    }
+  }
+
   getEntityList(): HassEntity[] {
     return Array.from(this.entities.values());
+  }
+
+  /**
+   * Turn on or off a list of entities, grouped by domain.
+   * Supports: light, switch, fan, input_boolean (turn_on/turn_off)
+   *           cover (open_cover/close_cover)
+   */
+  async bulkPower(entityIds: string[], action: 'on' | 'off'): Promise<void> {
+    // Domains that use standard turn_on / turn_off services
+    const standardDomains = ['light', 'switch', 'fan', 'input_boolean'];
+
+    const byDomain = new Map<string, string[]>();
+    for (const id of entityIds) {
+      const domain = id.split('.')[0];
+      if (!byDomain.has(domain)) byDomain.set(domain, []);
+      byDomain.get(domain)!.push(id);
+    }
+
+    const calls: Promise<void>[] = [];
+    for (const [domain, ids] of byDomain) {
+      if (standardDomains.includes(domain)) {
+        calls.push(this.callService(domain, action === 'on' ? 'turn_on' : 'turn_off', { entity_id: ids }));
+      } else if (domain === 'cover') {
+        calls.push(this.callService('cover', action === 'on' ? 'open_cover' : 'close_cover', { entity_id: ids }));
+      }
+    }
+
+    await Promise.all(calls);
   }
 
   disconnect(): void {

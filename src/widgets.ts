@@ -52,7 +52,7 @@ export function createHeader(screen: blessed.Widgets.Screen): blessed.Widgets.Bo
     top: 0,
     left: 0,
     width: '100%',
-    height: 3,
+    height: 4,
     tags: true,
     style: {
       bg: COLORS.bgHeader,
@@ -69,10 +69,10 @@ export function createHeader(screen: blessed.Widgets.Screen): blessed.Widgets.Bo
 export function createTable(screen: blessed.Widgets.Screen): blessed.Widgets.ListElement {
   const list = blessed.list({
     parent: screen,
-    top: 3,
+    top: 4,
     left: 0,
     width: '70%',
-    bottom: 5,
+    bottom: 2,
     keys: true,
     mouse: true,
     scrollable: true,
@@ -102,10 +102,10 @@ export function createTable(screen: blessed.Widgets.Screen): blessed.Widgets.Lis
 export function createDetailPanel(screen: blessed.Widgets.Screen): blessed.Widgets.BoxElement {
   return blessed.box({
     parent: screen,
-    top: 3,
+    top: 4,
     right: 0,
     width: '30%',
-    bottom: 5,
+    bottom: 2,
     tags: true,
     scrollable: true,
     alwaysScroll: true,
@@ -132,7 +132,7 @@ export function createDetailPanel(screen: blessed.Widgets.Screen): blessed.Widge
 export function createStatusBar(screen: blessed.Widgets.Screen): blessed.Widgets.BoxElement {
   return blessed.box({
     parent: screen,
-    bottom: 2,
+    bottom: 1,
     left: 0,
     width: '100%',
     height: 1,
@@ -151,13 +151,11 @@ export function createCommandBar(screen: blessed.Widgets.Screen): blessed.Widget
     bottom: 0,
     left: 0,
     width: '100%',
-    height: 3,
+    height: 1,
     tags: true,
-    border: { type: 'line' },
     style: {
       bg: COLORS.bgPanel,
       fg: COLORS.cyan,
-      border: { fg: COLORS.border },
     },
     padding: { left: 1, right: 1 },
   });
@@ -211,4 +209,29 @@ export function createToast(screen: blessed.Widgets.Screen): blessed.Widgets.Box
     },
     padding: { left: 1, right: 1 },
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Autocomplete popup
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function createAutocompleteBox(screen: blessed.Widgets.Screen): blessed.Widgets.ListElement {
+  return blessed.list({
+    parent: screen,
+    bottom: 3,
+    left: 2,
+    width: 52,
+    height: 8,
+    hidden: true,
+    tags: true,
+    border: { type: 'line' },
+    style: {
+      bg: COLORS.bgPanel,
+      fg: COLORS.textPrimary,
+      border: { fg: COLORS.cyan },
+      selected: { bg: COLORS.bgSelected, fg: COLORS.cyan, bold: true },
+      item: { fg: COLORS.textPrimary },
+    },
+    padding: { left: 1, right: 1 },
+  } as blessed.Widgets.ListOptions<blessed.Widgets.ListElementStyle>);
 }

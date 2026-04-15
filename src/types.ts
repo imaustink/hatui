@@ -40,6 +40,13 @@ export interface HassDevice {
   via_device_id: string | null;
 }
 
+export interface HassEntityRegistryEntry {
+  entity_id: string;
+  area_id: string | null;
+  device_id: string | null;
+  hidden_by: string | null;
+}
+
 export interface HassStateChange {
   entity_id: string;
   new_state: HassEntity | null;
@@ -144,6 +151,8 @@ export const DEVICE_TYPE_SHORTCUTS: Record<string, DeviceType> = {
 export interface AppState {
   currentView: DeviceType;
   filter: string;
+  filterMode: boolean;
+  areaFilter: string;
   selectedIndex: number;
   entities: HassEntity[];
   filteredEntities: HassEntity[];
@@ -152,6 +161,7 @@ export interface AppState {
   commandBuffer: string;
   describeMode: boolean;
   describeEntity: HassEntity | null;
+  detailVisible: boolean;
   helpMode: boolean;
   areas: HassArea[];
   devices: HassDevice[];
@@ -159,4 +169,12 @@ export interface AppState {
   sortAsc: boolean;
   error: string | null;
   lastRefresh: Date | null;
+  // ── autocomplete ──────────────────────────────────────────────────────
+  autocompleteSuggestions: string[];
+  autocompleteIndex: number;
+  // ── inline input (rename / area) ──────────────────────────────────────
+  inputMode: 'rename' | 'area' | null;
+  inputBuffer: string;
+  // ── recent areas (k9s-style selector) ─────────────────────────────────
+  recentAreas: string[];
 }

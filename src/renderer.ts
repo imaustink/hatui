@@ -1,4 +1,4 @@
-import { HassEntity, DeviceType, DEVICE_TYPE_DOMAINS, AppState } from './types';
+import { HassEntity, HassArea, DeviceType, DEVICE_TYPE_DOMAINS, AppState, DEVICE_TYPE_SHORTCUTS } from './types';
 import {
   COLORS,
   domainIcon,
@@ -22,31 +22,95 @@ export const LOGO_ART = [
 ].join('\n');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Header render
+// Header render  (3-line k9s-style)
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Render a k9s-style shortcut badge: highlighted key + dim label. */
+function badge(key: string, label: string): string {
+  return (
+    `{bold}{${COLORS.bgSelected}-bg}{${COLORS.cyan}-fg}${key}{/}` +
+    `{${COLORS.textSecondary}-fg} ${label}{/}`
+  );
+}
+
+/** Render the k9s-style numbered recent-area selector line. */
+function renderRecentAreasLine(recentAreas: string[], activeArea: string): string {
+  const sep = `{${COLORS.border}-fg}│{/}`;
+  const label = `{${COLORS.textDim}-fg}areas{/} ${sep} `;
+
+  if (recentAreas.length === 0) {
+    return ` ${label}{${COLORS.textDim}-fg}No recent areas  —  use :<view> <area> or :<area> to filter{/}`;
+  }
+
+  const parts = recentAreas.slice(0, 5).map((area, i) => {
+    const num = i + 1;
+    const isActive = area.toLowerCase() === activeArea.toLowerCase();
+    if (isActive) {
+      return (
+        `{bold}{${COLORS.cyan}-bg}{${COLORS.bgPanel}-fg}<${num}>{/}` +
+        `{bold}{${COLORS.cyan}-fg} ${area}{/}`
+      );
+    }
+    return (
+      `{bold}{${COLORS.bgSelected}-bg}{${COLORS.cyan}-fg}<${num}>{/}` +
+      `{${COLORS.textSecondary}-fg} ${area}{/}`
+    );
+  });
+
+  return ` ${label}` + parts.join('  ');
+}
 
 export function renderHeader(state: AppState, width: number): string {
   const connIcon = state.connected
     ? `{${COLORS.green}-fg}◉ CONNECTED{/}`
     : `{${COLORS.red}-fg}◉ OFFLINE{/}`;
 
-  const viewLabel = `{bold}{${COLORS.cyan}-fg}${state.currentView.toUpperCase()}{/}`;
   const countLabel = `{${COLORS.textSecondary}-fg}${state.filteredEntities.length} entities{/}`;
   const time = new Date().toLocaleTimeString('en-US', { hour12: false });
   const timeLabel = `{${COLORS.textDim}-fg}${time}{/}`;
-
   const title = `{bold}{${COLORS.magenta}-fg} HA{/}{bold}{${COLORS.cyan}-fg}TUI{/}`;
   const sep = `{${COLORS.border}-fg}│{/}`;
 
-  // On narrow terminals skip the entity count and spacer arithmetic.
-  if (width < 80) {
-    return ` ${title}  ${sep}  ${viewLabel}  ${sep}  ${connIcon}  ${timeLabel} `;
+  // ── Line 1: title bar ──────────────────────────────────────────────────────
+  const line1 = ` ${title}  ${sep}  ${connIcon}  ${sep}  ${countLabel}  ${sep}  ${timeLabel} `;
+
+  if (width < 60) {
+    return line1;
   }
 
-  const spacer = ' '.repeat(Math.max(0, Math.floor(width / 2) - 20));
-  const right = `${countLabel}  ${connIcon}  ${timeLabel}`;
+  // ── Line 2: recent areas (k9s-style namespace selector) ───────────────────
+  const line2 = renderRecentAreasLine(state.recentAreas, state.areaFilter);
 
-  return ` ${title}  ${sep}  ${viewLabel}${spacer}${right} `;
+  // ── Line 3: view shortcut badges ──────────────────────────────────────────
+  const viewBadges = [
+    badge(':all',     'All'),
+    badge(':lights',  'Lights'),
+    badge(':switches','Switches'),
+    badge(':sensors', 'Sensors'),
+    badge(':climate', 'Climate'),
+    badge(':covers',  'Covers'),
+    badge(':fans',    'Fans'),
+    badge(':media',   'Media'),
+    badge(':locks',   'Locks'),
+  ];
+
+  // ── Line 4: action shortcut badges ────────────────────────────────────────
+  const actionBadges = [
+    badge('<t>', 'Toggle'),
+    badge('<d>', 'Describe'),
+    badge('<n>', 'Rename'),
+    badge('<a>', 'Area'),
+    badge('<r>', 'Refresh'),
+    badge('</>', 'Filter'),
+    badge('<?>', 'Help'),
+    badge('<q>', 'Quit'),
+  ];
+
+  const gap = '  ';
+  const line3 = ' ' + viewBadges.join(gap);
+  const line4 = ' ' + actionBadges.join(gap);
+
+  return `${line1}\n${line2}\n${line3}\n${line4}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -88,7 +152,7 @@ export function renderEntityRow(
   const iconColor  = domainColorForEntity(entity.entity_id);
 
   let row =
-    ` {${iconColor}-fg}${icon}{/}` +
+    ` {${iconColor}-fg}${pad(icon, COL_ICON)}{/}` +
     `  {${nameColor}-fg}${pad(name, cols.name)}{/}` +
     `  {${stateCol}-fg}${pad(stateStr, cols.state)}{/}`;
 
@@ -182,7 +246,6 @@ export function renderDetail(entity: HassEntity | null, panelInnerWidth = 30): s
   if (toggleable.includes(domain)) {
     lines.push(`{${COLORS.green}-fg}[t]{/} Toggle`);
   }
-  lines.push(`{${COLORS.yellow}-fg}[y]{/} Copy entity_id`);
   lines.push(`{${COLORS.cyan}-fg}[?]{/} Help`);
 
   return lines.join('\n');
@@ -193,27 +256,46 @@ export function renderDetail(entity: HassEntity | null, panelInnerWidth = 30): s
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function renderCommandBar(state: AppState, termWidth = 120): string {
+  if (state.inputMode === 'rename') {
+    return (
+      `{bold}{${COLORS.magenta}-fg}Rename >{/} {${COLORS.textPrimary}-fg}${state.inputBuffer}{/}{${COLORS.magenta}-fg}█{/}` +
+      `  {${COLORS.textDim}-fg}ENTER:confirm  ESC:cancel{/}`
+    );
+  }
+  if (state.inputMode === 'area') {
+    return (
+      `{bold}{${COLORS.teal}-fg}Area >{/} {${COLORS.textPrimary}-fg}${state.inputBuffer}{/}{${COLORS.teal}-fg}█{/}` +
+      `  {${COLORS.textDim}-fg}TAB:complete  ENTER:confirm  ESC:cancel  (empty=clear){/}`
+    );
+  }
   if (state.commandMode) {
+    // Show ":view area" with the area portion highlighted differently
     const buf = state.commandBuffer;
-    return `{bold}{${COLORS.cyan}-fg}:{/}{${COLORS.textPrimary}-fg}${buf}{/}{${COLORS.cyan}-fg}█{/}`;
+    const spaceIdx = buf.indexOf(' ');
+    if (spaceIdx !== -1) {
+      const viewPart = buf.slice(0, spaceIdx);
+      const areaPart = buf.slice(spaceIdx + 1);
+      return (
+        `{bold}{${COLORS.cyan}-fg}:{/}` +
+        `{${COLORS.textPrimary}-fg}${viewPart}{/}` +
+        ` {${COLORS.teal}-fg}${areaPart}{/}` +
+        `{${COLORS.cyan}-fg}█{/}` +
+        `  {${COLORS.textDim}-fg}TAB:complete  ENTER:apply  ESC:cancel{/}`
+      );
+    }
+    return (
+      `{bold}{${COLORS.cyan}-fg}:{/}{${COLORS.textPrimary}-fg}${buf}{/}{${COLORS.cyan}-fg}█{/}` +
+      `  {${COLORS.textDim}-fg}TAB:complete  SPC:add area  ENTER:apply  ESC:cancel{/}`
+    );
   }
-  if (state.filter) {
-    return `{${COLORS.yellow}-fg}/${/}{${COLORS.textPrimary}-fg}${state.filter}{/}{${COLORS.yellow}-fg}│{/} {${COLORS.textDim}-fg}ESC to clear{/}`;
+  if (state.filterMode || state.filter) {
+    return (
+      `{${COLORS.yellow}-fg}/{/}{${COLORS.textPrimary}-fg}${state.filter}{/}{${COLORS.yellow}-fg}█{/}` +
+      `  {${COLORS.textDim}-fg}TAB:complete  ESC:clear{/}`
+    );
   }
-  // Shorten the hint string on narrow terminals so it doesn't wrap.
-  if (termWidth < 80) {
-    return `{${COLORS.textDim}-fg}/:filter  :view  t:toggle  d:describe  ?:help  q:quit{/}`;
-  }
-  return (
-    `{${COLORS.textDim}-fg}/:filter  ` +
-    `:view  ` +
-    `t:toggle  ` +
-    `l:logs  ` +
-    `d:describe  ` +
-    `r:refresh  ` +
-    `?:help  ` +
-    `q:quit{/}`
-  );
+  // Normal mode — hints live in the header; keep the bar empty.
+  return '';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -276,14 +358,25 @@ export function renderHelp(): string {
     ` ${k(':cameras')}    ${d('Cameras')}`,
     ` ${k(':vacuums')}    ${d('Vacuums')}`,
     '',
+    h('── BULK POWER (:command) ────────'),
+    ` ${k(':on')}         ${d('Turn on all in current view')}`,
+    ` ${k(':off')}        ${d('Turn off all in current view')}`,
+    ` ${k(':lights on')}  ${d('Turn on all lights')}`,
+    ` ${k(':lights off')} ${d('Turn off all lights')}`,
+    ` ${k(':switches on')} ${d('Turn on all switches')}`,
+    ` ${k(':switches off')} ${d('Turn off all switches')}`,
+    '',
     h('── ACTIONS ─────────────────────'),
     ` ${k('t')}          ${d('Toggle entity')}`,
+    ` ${k('n')}          ${d('Rename device')}`,
+    ` ${k('a')}          ${d('Assign area to device')}`,
     ` ${k('/')}          ${d('Filter entities (fuzzy)')}`,
     ` ${k('d')}          ${d('Describe / inspect entity')}`,
     ` ${k('r')}          ${d('Refresh states')}`,
-    ` ${k('y')}          ${d('Copy entity_id to clipboard')}`,
     ` ${k('?')}          ${d('Toggle this help')}`,
+
     ` ${k('q / ctrl+c')} ${d('Quit')}`,
+    '',
     '',
     dim('Press ? or ESC to close'),
   ].join('\n');
@@ -296,7 +389,9 @@ export function renderHelp(): string {
 export function filterEntities(
   entities: HassEntity[],
   view: DeviceType,
-  filter: string
+  filter: string,
+  areaMap: Map<string, string> = new Map(),
+  areaFilter = ''
 ): HassEntity[] {
   let result = entities;
 
@@ -315,6 +410,13 @@ export function filterEntities(
     );
   }
 
+  if (areaFilter) {
+    const a = areaFilter.toLowerCase();
+    result = result.filter((e) =>
+      (areaMap.get(e.entity_id) ?? '').toLowerCase().includes(a)
+    );
+  }
+
   return result;
 }
 
@@ -330,4 +432,124 @@ function pad(str: string, len: number): string {
 function truncate(str: string, len: number): string {
   if (str.length <= len) return str;
   return str.substring(0, len - 1) + '…';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Autocomplete helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Compute command-mode suggestions (view shortcuts, then area names after a space). */
+export function computeCommandSuggestions(buffer: string, areas: HassArea[] = []): string[] {
+  const spaceIdx = buffer.indexOf(' ');
+
+  if (spaceIdx !== -1) {
+    // After a space: suggest area names scoped to what the user typed
+    const areaQ = buffer.slice(spaceIdx + 1).toLowerCase();
+    const viewPart = buffer.slice(0, spaceIdx);
+    const candidates = areas.map((a) => a.name);
+    const filtered = areaQ
+      ? candidates.filter((a) => a.toLowerCase().includes(areaQ))
+      : candidates;
+    const sorted = filtered.sort((a, b) => {
+      if (!areaQ) return a.localeCompare(b);
+      const aStarts = a.toLowerCase().startsWith(areaQ) ? -1 : 1;
+      const bStarts = b.toLowerCase().startsWith(areaQ) ? -1 : 1;
+      return aStarts - bStarts || a.localeCompare(b);
+    });
+    return sorted.slice(0, 6).map((area) => `${viewPart} ${area}`);
+  }
+
+  // Before a space: suggest view shortcut names
+  const candidates = Object.keys(DEVICE_TYPE_SHORTCUTS).concat(['on', 'off', 'quit', 'exit']);
+  if (!buffer) return candidates.slice(0, 6);
+  const q = buffer.toLowerCase();
+  const prefix = candidates.filter((c) => c.toLowerCase().startsWith(q));
+  const contains = candidates.filter((c) => !c.toLowerCase().startsWith(q) && c.toLowerCase().includes(q));
+  return [...prefix, ...contains].slice(0, 6);
+}
+
+/** Compute area suggestions for area-assignment input mode. */
+export function computeAreaSuggestions(buffer: string, areas: HassArea[]): string[] {
+  const candidates = areas.map((a) => a.name);
+  if (!buffer) return candidates.slice(0, 8);
+  const q = buffer.toLowerCase();
+  const prefix = candidates.filter((a) => a.toLowerCase().startsWith(q));
+  const contains = candidates.filter((a) => !a.toLowerCase().startsWith(q) && a.toLowerCase().includes(q));
+  return [...prefix, ...contains].slice(0, 8);
+}
+
+/** Compute filter-mode suggestions (text-only — entity names and IDs). */
+export function computeFilterSuggestions(
+  query: string,
+  entities: HassEntity[],
+  _areaMap: Map<string, string>,
+  _areas: HassArea[] = []
+): string[] {
+  if (!query) return [];
+
+  // Simple text suggestions: friendly names and entity IDs
+  const q = query.toLowerCase();
+  const namePrefix: string[] = [];
+  const nameContains: string[] = [];
+  const idContains: string[] = [];
+  const seen = new Set<string>();
+
+  for (const entity of entities) {
+    const name = friendlyName(entity);
+    const id = entity.entity_id;
+    if (seen.has(name)) continue;
+    if (name.toLowerCase().startsWith(q)) {
+      namePrefix.push(name);
+      seen.add(name);
+    } else if (name.toLowerCase().includes(q)) {
+      nameContains.push(name);
+      seen.add(name);
+    } else if (id.toLowerCase().includes(q) && !seen.has(id)) {
+      idContains.push(id);
+      seen.add(id);
+    }
+  }
+  return [...namePrefix, ...nameContains, ...idContains].slice(0, 6);
+}
+
+/** Render one autocomplete list item with the matched portion highlighted. */
+export function renderAutocompleteItem(text: string, query: string): string {
+  const spaceIdx = query.indexOf(' ');
+  const isAreaQuery = spaceIdx !== -1;
+
+  if (isAreaQuery) {
+    // Format: "viewPart areaName" — show view part dimmed, highlight in area
+    const areaQ = query.slice(spaceIdx + 1);
+    const textSpaceIdx = text.indexOf(' ');
+    const viewPart = textSpaceIdx !== -1 ? text.slice(0, textSpaceIdx + 1) : '';
+    const areaName = textSpaceIdx !== -1 ? text.slice(textSpaceIdx + 1) : text;
+    const dimPrefix = `{${COLORS.textDim}-fg}${viewPart}{/}`;
+    if (!areaQ) {
+      return `${dimPrefix}{${COLORS.textPrimary}-fg}${areaName}{/}`;
+    }
+    const idx = areaName.toLowerCase().indexOf(areaQ.toLowerCase());
+    if (idx === -1) return `${dimPrefix}{${COLORS.textPrimary}-fg}${areaName}{/}`;
+    const before = areaName.slice(0, idx);
+    const match  = areaName.slice(idx, idx + areaQ.length);
+    const after  = areaName.slice(idx + areaQ.length);
+    return (
+      `${dimPrefix}` +
+      `{${COLORS.textSecondary}-fg}${before}{/}` +
+      `{bold}{${COLORS.cyan}-fg}${match}{/}` +
+      `{${COLORS.textPrimary}-fg}${after}{/}`
+    );
+  }
+
+  // Plain text match — highlight within the name
+  const matchQuery = query;
+  const idx = text.toLowerCase().indexOf(matchQuery.toLowerCase());
+  if (idx === -1) return `{${COLORS.textPrimary}-fg}${text}{/}`;
+  const before = text.slice(0, idx);
+  const match  = text.slice(idx, idx + matchQuery.length);
+  const after  = text.slice(idx + matchQuery.length);
+  return (
+    `{${COLORS.textSecondary}-fg}${before}{/}` +
+    `{bold}{${COLORS.cyan}-fg}${match}{/}` +
+    `{${COLORS.textPrimary}-fg}${after}{/}`
+  );
 }

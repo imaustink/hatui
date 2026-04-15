@@ -47,12 +47,13 @@ export const COLORS = {
 
 // Domain → icon mapping (unicode block chars + special chars)
 export const DOMAIN_ICONS: Record<string, string> = {
-  light:              '⚡',
+  light:              '◆',
   switch:             '⏻',
   sensor:             '◉',
   binary_sensor:      '◎',
   climate:            '⊕',
-  cover:              '⬛',
+  cover:              '▫',
+
   fan:                '✦',
   media_player:       '♫',
   automation:         '⚙',
