@@ -234,6 +234,132 @@ export class HassClient extends EventEmitter {
   }
 
   /**
+   * Activate an entity in a domain-aware manner (smart toggle/activate).
+   * Returns true if an action was dispatched, false if the domain is read-only.
+   */
+  async activateEntity(entityId: string): Promise<boolean> {
+    const domain = entityId.split('.')[0];
+    const toggleDomains = ['light', 'switch', 'fan', 'cover', 'media_player', 'lock', 'automation', 'input_boolean'];
+    if (toggleDomains.includes(domain)) {
+      await this.callService(domain, 'toggle', { entity_id: entityId });
+      return true;
+    }
+    if (domain === 'button' || domain === 'input_button') {
+      await this.callService(domain, 'press', { entity_id: entityId });
+      return true;
+    }
+    if (domain === 'scene') {
+      await this.callService('scene', 'turn_on', { entity_id: entityId });
+      return true;
+    }
+    if (domain === 'script') {
+      const entity = this.entities.get(entityId);
+      const service = entity?.state === 'on' ? 'turn_off' : 'turn_on';
+      await this.callService('script', service, { entity_id: entityId });
+      return true;
+    }
+    if (domain === 'vacuum') {
+      const entity = this.entities.get(entityId);
+      const cmd = entity?.state === 'cleaning' ? 'stop' : 'start';
+      await this.callService('vacuum', cmd, { entity_id: entityId });
+      return true;
+    }
+    return false;
+  }
+
+  async adjustBrightness(entityId: string, delta: number): Promise<boolean> {
+    const entity = this.entities.get(entityId);
+    // If the light is off, ignore a decrease request — don't turn it on at a stale brightness.
+    if (delta < 0 && entity?.state !== 'on') return false;
+    const current = (entity?.attributes['brightness'] as number | undefined) ?? 128;
+    const newBrightness = Math.max(1, Math.min(255, Math.round(current + delta)));
+    await this.callService('light', 'turn_on', { entity_id: entityId, brightness: newBrightness });
+    return true;
+  }
+
+  async adjustTemperature(entityId: string, delta: number): Promise<void> {
+    const entity = this.entities.get(entityId);
+    const current = (entity?.attributes['temperature'] as number | undefined) ?? 20;
+    const newTemp = Math.round((current + delta) * 2) / 2; // round to nearest 0.5
+    await this.callService('climate', 'set_temperature', { entity_id: entityId, temperature: newTemp });
+  }
+
+  async cycleHvacMode(entityId: string): Promise<void> {
+    const entity = this.entities.get(entityId);
+    if (!entity) return;
+    const modes = (entity.attributes['hvac_modes'] as string[] | undefined) ?? [];
+    if (modes.length < 2) return;
+    const currentIdx = modes.indexOf(entity.state);
+    const nextMode = modes[(currentIdx + 1) % modes.length];
+    await this.callService('climate', 'set_hvac_mode', { entity_id: entityId, hvac_mode: nextMode });
+  }
+
+  async controlCover(entityId: string, action: 'open_cover' | 'close_cover' | 'stop_cover'): Promise<void> {
+    await this.callService('cover', action, { entity_id: entityId });
+  }
+
+  async adjustFanSpeed(entityId: string, direction: 1 | -1): Promise<number | null> {
+    const entity = this.entities.get(entityId);
+    // If the fan is already off, ignore a decrease request.
+    if (direction === -1 && entity?.state !== 'on') return null;
+    const current = (entity?.attributes['percentage'] as number | undefined) ?? 0;
+    const step = (entity?.attributes['percentage_step'] as number | undefined) ?? 25;
+    // Snap current to the nearest step multiple so arithmetic always lands on a valid grid position.
+    const snapped = Math.round(current / step) * step;
+    const newPct = Math.max(0, Math.min(100, snapped + direction * step));
+    if (newPct === 0) {
+      await this.callService('fan', 'turn_off', { entity_id: entityId });
+    } else {
+      await this.callService('fan', 'set_percentage', { entity_id: entityId, percentage: newPct });
+    }
+    return newPct;
+  }
+
+  async adjustVolume(entityId: string, delta: number): Promise<void> {
+    const entity = this.entities.get(entityId);
+    const current = (entity?.attributes['volume_level'] as number | undefined) ?? 0.5;
+    const newVol = Math.max(0, Math.min(1, parseFloat((current + delta).toFixed(2))));
+    await this.callService('media_player', 'volume_set', { entity_id: entityId, volume_level: newVol });
+  }
+
+  async mediaPlayerCommand(entityId: string, command: 'media_next_track' | 'media_previous_track'): Promise<void> {
+    await this.callService('media_player', command, { entity_id: entityId });
+  }
+
+  async vacuumCommand(entityId: string, command: 'start' | 'stop' | 'return_to_base'): Promise<void> {
+    await this.callService('vacuum', command, { entity_id: entityId });
+  }
+
+  async alarmControl(entityId: string, action: string, code?: string): Promise<void> {
+    const serviceData: Record<string, unknown> = { entity_id: entityId };
+    if (code) serviceData['code'] = code;
+    await this.callService('alarm_control_panel', action, serviceData);
+  }
+
+  async adjustNumber(entityId: string, direction: 1 | -1): Promise<void> {
+    const entity = this.entities.get(entityId);
+    if (!entity) return;
+    const domain = entityId.split('.')[0];
+    const current = parseFloat(entity.state) || 0;
+    const step = (entity.attributes['step'] as number | undefined) ?? 1;
+    const min = (entity.attributes['min'] as number | undefined) ?? Number.NEGATIVE_INFINITY;
+    const max = (entity.attributes['max'] as number | undefined) ?? Number.POSITIVE_INFINITY;
+    const newVal = Math.max(min, Math.min(max, parseFloat((current + direction * step).toFixed(6))));
+    await this.callService(domain, 'set_value', { entity_id: entityId, value: newVal });
+  }
+
+  async cycleSelectOption(entityId: string, direction: 1 | -1): Promise<void> {
+    const entity = this.entities.get(entityId);
+    if (!entity) return;
+    const domain = entityId.split('.')[0];
+    const options = (entity.attributes['options'] as string[] | undefined) ?? [];
+    if (options.length < 2) return;
+    const currentIdx = options.indexOf(entity.state);
+    const nextIdx = (currentIdx + direction + options.length) % options.length;
+    await this.callService(domain, 'select_option', { entity_id: entityId, option: options[nextIdx] });
+  }
+
+  /**
    * Turn on or off a list of entities, grouped by domain.
    * Supports: light, switch, fan, input_boolean (turn_on/turn_off)
    *           cover (open_cover/close_cover)

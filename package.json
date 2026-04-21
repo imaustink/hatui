@@ -18,6 +18,11 @@
     "preset": "ts-jest",
     "testEnvironment": "node",
     "testMatch": ["**/tests/**/*.test.ts"],
+    "globals": {
+      "ts-jest": {
+        "tsconfig": "tsconfig.test.json"
+      }
+    },
     "collectCoverageFrom": ["src/**/*.ts", "!src/index.ts", "!src/app.ts", "!src/widgets.ts"]
   },
   "keywords": [

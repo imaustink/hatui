@@ -5,6 +5,7 @@ import {
   DeviceType,
   DEVICE_TYPE_DOMAINS,
   DEVICE_TYPE_SHORTCUTS,
+  HassConfig,
   HassEntity,
 } from './types';
 import {
@@ -26,6 +27,10 @@ import {
   renderTableHeader,
   renderStatusBar,
   renderHelp,
+  renderContextTableHeader,
+  renderContextRow,
+  renderContextDetail,
+  renderContextStatusBar,
   filterEntities,
   computeCommandSuggestions,
   computeFilterSuggestions,
@@ -48,9 +53,15 @@ export class App {
   private state: AppState;
   private areaMap: Map<string, string> = new Map(); // entity_id → area name
   private refreshTimer: NodeJS.Timeout | null = null;
+  private _settingSelection = false;
+  private _suppressNextEnter = false;
   private headerTimer: NodeJS.Timeout | null = null;
 
-  constructor(private client: HassClient) {
+  constructor(
+    private client: HassClient,
+    private readonly homes: HassConfig[],
+    private activeHomeIndex: number,
+  ) {
     this.state = {
       currentView: 'all',
       filter: '',
@@ -77,6 +88,10 @@ export class App {
       inputMode: null,
       inputBuffer: '',
       recentAreas: [],
+      contextMode: false,
+      homes: this.homes,
+      activeHomeIndex: this.activeHomeIndex,
+      contextSelectedIndex: 0,
     };
 
     this.screen = createScreen();
@@ -91,6 +106,7 @@ export class App {
 
     this.bindKeys();
     this.bindClientEvents();
+    this.bindTableSelect();
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -100,7 +116,10 @@ export class App {
   async start(): Promise<void> {
     this.renderSplash();
     this.screen.render();
+    await this.connectAndInit();
+  }
 
+  private async connectAndInit(): Promise<void> {
     try {
       await this.client.connect();
     } catch (err) {
@@ -126,6 +145,59 @@ export class App {
     this.header.setContent(
       `{center}{bold}{${COLORS.cyan}-fg} HATUI{/} {${COLORS.magenta}-fg}─ Home Assistant TUI{/} {${COLORS.textDim}-fg}Connecting…{/}{/center}`
     );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Context / home switcher  (k9s-style)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  openContextSwitcher(): void {
+    this.state.contextMode = true;
+    this.state.contextSelectedIndex = Math.max(0, this.activeHomeIndex);
+    this.renderAll();
+  }
+
+  private async switchHome(idx: number): Promise<void> {
+    if (idx < 0 || idx >= this.homes.length) return;
+    if (idx === this.activeHomeIndex) return;
+
+    const home = this.homes[idx];
+
+    // Tear down old connection cleanly
+    this.client.removeAllListeners();
+    this.client.disconnect();
+
+    if (this.headerTimer) {
+      clearInterval(this.headerTimer);
+      this.headerTimer = null;
+    }
+
+    // Reset runtime state
+    this.areaMap.clear();
+    this.state.entities = [];
+    this.state.filteredEntities = [];
+    this.state.areas = [];
+    this.state.devices = [];
+    this.state.connected = false;
+    this.state.error = null;
+    this.state.selectedIndex = 0;
+    this.state.recentAreas = [];
+
+    // Switch to new home
+    this.activeHomeIndex = idx;
+    this.state.activeHomeIndex = idx;
+    this.state.homes = this.homes;
+
+    const { HassClient } = await import('./hass-client');
+    this.client = new HassClient(home);
+    this.bindClientEvents();
+
+    const homeName = home.name ?? (() => { try { return new URL(home.url).hostname; } catch { return home.url; } })();
+    this.renderSplash();
+    this.screen.render();
+
+    await this.connectAndInit();
+    this.showToast(`Switched to ${homeName}`);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -237,6 +309,10 @@ export class App {
   }
 
   private renderTableView(): void {
+    if (this.state.contextMode) {
+      this.renderContextTableView();
+      return;
+    }
     const screenWidth = (this.screen.width as number) ?? 120;
     const detailVisible = this.state.detailVisible;
     this.table.width = detailVisible ? '70%' : '100%';
@@ -269,12 +345,60 @@ export class App {
       items.push(`{center}{${COLORS.textDim}-fg}No entities found{/}{/center}`);
     }
 
+    this._settingSelection = true;
     this.table.setItems(items as unknown as string[]);
-    const targetIdx = Math.min(selectedDisplayIdx, items.length - 1);
+    const targetIdx = Math.max(1, Math.min(selectedDisplayIdx, items.length - 1));
     this.table.select(targetIdx);
+    this._settingSelection = false;
+  }
+
+  private renderContextTableView(): void {
+    const screenWidth = (this.screen.width as number) ?? 120;
+    const detailVisible = this.state.detailVisible;
+    this.table.width = detailVisible ? '70%' : '100%';
+    const tableInnerWidth = detailVisible
+      ? Math.floor(screenWidth * 0.7) - 4
+      : screenWidth - 4;
+
+    this.table.setLabel(` {bold}{${COLORS.cyan}-fg}contexts{/} `);
+    const items: string[] = [renderContextTableHeader(tableInnerWidth)];
+
+    let selectedDisplayIdx = 1;
+
+    for (let i = 0; i < this.homes.length; i++) {
+      const isActive   = i === this.activeHomeIndex;
+      const isSelected = i === this.state.contextSelectedIndex;
+      if (isSelected) selectedDisplayIdx = items.length;
+      items.push(renderContextRow(this.homes[i], isActive, isSelected, tableInnerWidth));
+    }
+
+    if (this.homes.length === 0) {
+      items.push('');
+      items.push(`{center}{${COLORS.textDim}-fg}No homes configured — add a "homes" array to config.json{/}{/center}`);
+    }
+
+    this._settingSelection = true;
+    this.table.setItems(items as unknown as string[]);
+    const targetIdx = Math.max(1, Math.min(selectedDisplayIdx, items.length - 1));
+    this.table.select(targetIdx);
+    this._settingSelection = false;
   }
 
   private renderDetailView(): void {
+    if (this.state.contextMode) {
+      if (!this.state.detailVisible) {
+        this.detail.hide();
+        return;
+      }
+      this.detail.show();
+      const screenWidth = (this.screen.width as number) ?? 120;
+      const panelInnerWidth = Math.floor(screenWidth * 0.3) - 4;
+      const sel = this.homes[this.state.contextSelectedIndex] ?? null;
+      const isActive = this.state.contextSelectedIndex === this.activeHomeIndex;
+      this.detail.setContent(renderContextDetail(sel, isActive, panelInnerWidth));
+      this.detail.setLabel(` {bold}{${COLORS.cyan}-fg}⌂ HOME{/} `);
+      return;
+    }
     if (!this.state.detailVisible) {
       this.detail.hide();
       return;
@@ -295,6 +419,12 @@ export class App {
   }
 
   private renderStatusBarView(): void {
+    if (this.state.contextMode) {
+      const sel = this.homes[this.state.contextSelectedIndex] ?? null;
+      const isActive = this.state.contextSelectedIndex === this.activeHomeIndex;
+      this.statusBar.setContent(renderContextStatusBar(sel, isActive));
+      return;
+    }
     this.statusBar.setContent(renderStatusBar(this.state));
   }
 
@@ -327,6 +457,30 @@ export class App {
     const lower = trimmed.toLowerCase();
     if (lower === 'q' || lower === 'quit' || lower === 'exit') {
       this.quit();
+      return;
+    }
+
+    // ── :ctx / :home / :homes — context switcher ───────────────────────────
+    if (lower === 'ctx' || lower === 'context' || lower === 'home' || lower === 'homes') {
+      this.openContextSwitcher();
+      return;
+    }
+
+    // :ctx <name> / :home <name> / :homes <name> — switch to a named home directly
+    const spaceIdx0 = trimmed.indexOf(' ');
+    const firstToken0 = (spaceIdx0 === -1 ? trimmed : trimmed.slice(0, spaceIdx0)).toLowerCase();
+    if ((firstToken0 === 'ctx' || firstToken0 === 'context' || firstToken0 === 'home' || firstToken0 === 'homes') && spaceIdx0 !== -1) {
+      const query = trimmed.slice(spaceIdx0 + 1).trim().toLowerCase();
+      const idx = this.homes.findIndex(
+        (h) => (h.name ?? '').toLowerCase() === query || new URL(h.url).hostname.toLowerCase() === query
+      );
+      if (idx >= 0) {
+        void this.switchHome(idx);
+      } else {
+        this.state.error = `Home not found: ${query}`;
+        this.renderAll();
+        setTimeout(() => { this.state.error = null; this.renderAll(); }, 3000);
+      }
       return;
     }
 
@@ -423,15 +577,49 @@ export class App {
     screen.key(['C-c'], () => this.quit());
 
     screen.on('keypress', (_ch: string, key: blessed.Widgets.Events.IKeyEventArg) => {
+      const isEnterKey = key.name === 'enter' || key.name === 'return' ||
+        _ch === '\r' || _ch === '\n' ||
+        (key as unknown as { sequence?: string }).sequence === '\r' ||
+        (key as unknown as { sequence?: string }).sequence === '\n';
       if (this.state.helpMode) {
         this.state.helpMode = false;
         this.helpOverlay.hide();
         this.renderAll();
         return;
       }
+      // ── Context / home switcher mode ──────────────────────────────────────
+      if (this.state.contextMode) {
+        if (key.name === 'escape' || key.name === 'q') {
+          this.state.contextMode = false;
+          this.renderAll();
+        } else if (isEnterKey && this.homes.length > 0) {
+          const idx = this.state.contextSelectedIndex;
+          this.state.contextMode = false;
+          void this.switchHome(idx);
+        } else if (this.homes.length > 0 && (key.name === 'up' || key.name === 'k')) {
+          this.state.contextSelectedIndex = Math.max(0, this.state.contextSelectedIndex - 1);
+          this.renderTableView();
+          this.renderStatusBarView();
+          this.renderDetailView();
+          this.screen.render();
+        } else if (this.homes.length > 0 && (key.name === 'down' || key.name === 'j')) {
+          this.state.contextSelectedIndex = Math.min(
+            this.homes.length - 1,
+            this.state.contextSelectedIndex + 1
+          );
+          this.renderTableView();
+          this.renderStatusBarView();
+          this.renderDetailView();
+          this.screen.render();
+        }
+        return;
+      }
       // ── Rename / Area input mode ──────────────────────────────────────────────
       if (this.state.inputMode) {
-        if (key.name === 'tab' && this.state.inputMode === 'area') {
+        if (isEnterKey) {
+          void this.commitInput();
+          return;
+        } else if (key.name === 'tab' && this.state.inputMode === 'area') {
           this.acceptAutocomplete();
           return;
         } else if (key.name === 'up' && this.state.inputMode === 'area') {
@@ -453,10 +641,7 @@ export class App {
           this.renderCommandBarView();
           screen.render();
           return;
-        } else if (key.name === 'enter') {
-          void this.commitInput();
-          return;
-        } else if (_ch && !key.ctrl && !key.meta && key.name !== 'escape') {
+        } else if (_ch && !key.ctrl && !key.meta && key.name !== 'escape' && _ch !== '\r' && _ch !== '\n') {
           this.state.inputBuffer += _ch;
           if (this.state.inputMode === 'area') this.updateAutocomplete();
           this.renderCommandBarView();
@@ -469,6 +654,21 @@ export class App {
       if (this.state.commandMode) {
         if (key.name === 'tab') {
           this.acceptAutocomplete();
+          // Submit only if the buffer now contains a valid type token AND an area token
+          const buf = this.state.commandBuffer.trim();
+          const spaceIdx = buf.indexOf(' ');
+          const typeToken = (spaceIdx === -1 ? buf : buf.slice(0, spaceIdx)).toLowerCase();
+          const areaToken = spaceIdx === -1 ? '' : buf.slice(spaceIdx + 1).trim();
+          const hasValidType = !!DEVICE_TYPE_SHORTCUTS[typeToken];
+          if (hasValidType && areaToken.length > 0) {
+            const cmd = this.state.commandBuffer;
+            this.state.commandMode = false;
+            this.state.commandBuffer = '';
+            this.hideAutocomplete();
+            this.renderCommandBarView();
+            screen.render();
+            this.executeCommand(cmd);
+          }
           return;
         } else if (key.name === 'up') {
           this.navigateAutocomplete(-1);
@@ -476,8 +676,17 @@ export class App {
         } else if (key.name === 'down') {
           this.navigateAutocomplete(1);
           return;
-        } else if (key.name === 'enter' || key.name === 'return') {
-          // If a suggestion is highlighted, accept it first
+        } else if (isEnterKey) {
+          const rawBuf = this.state.commandBuffer.trim().toLowerCase();
+          if (rawBuf === 'home' || rawBuf === 'homes' || rawBuf === 'ctx' || rawBuf === 'context') {
+            this.state.commandMode = false;
+            this.state.commandBuffer = '';
+            this.hideAutocomplete();
+            this.renderCommandBarView();
+            screen.render();
+            this.openContextSwitcher();
+            return;
+          }
           if (this.state.autocompleteSuggestions.length > 0) {
             this.acceptAutocomplete();
           }
@@ -487,6 +696,7 @@ export class App {
           this.hideAutocomplete();
           this.renderCommandBarView();
           screen.render();
+          this._suppressNextEnter = true;
           this.executeCommand(cmd);
           return;
         } else if (key.name === 'escape') {
@@ -531,7 +741,7 @@ export class App {
           this.updateAutocomplete();
           this.applyFilter();
           return;
-        } else if (key.name === 'enter' || key.name === 'return') {
+        } else if (isEnterKey) {
           this.state.filterMode = false;
           this.hideAutocomplete();
           this.renderCommandBarView();
@@ -546,6 +756,27 @@ export class App {
         return;
       }
 
+      // Normal mode: Enter activates selected entity
+      if (isEnterKey) {
+        if (this._suppressNextEnter) {
+          this._suppressNextEnter = false;
+          return;
+        }
+        const entity = this.state.filteredEntities[this.state.selectedIndex];
+        if (entity) {
+          this.client.activateEntity(entity.entity_id).then((acted) => {
+            if (acted) {
+              this.showToast(`Activated: ${entity.entity_id}`);
+            } else {
+              this.showToast(`No action for ${entity.entity_id.split('.')[0]}`, true);
+            }
+          }).catch((e: Error) => {
+            this.showToast(`Error: ${e.message}`, true);
+          });
+        }
+        return;
+      }
+
       const { filteredEntities, selectedIndex } = this.state;
       const count = filteredEntities.length;
 
@@ -554,6 +785,7 @@ export class App {
         case 'up':
         case 'k':
           this.state.selectedIndex = Math.max(0, selectedIndex - 1);
+          this.renderHeaderBar();
           this.renderTableView();
           this.renderDetailView();
           this.renderStatusBarView();
@@ -563,6 +795,7 @@ export class App {
         case 'down':
         case 'j':
           this.state.selectedIndex = Math.min(count - 1, selectedIndex + 1);
+          this.renderHeaderBar();
           this.renderTableView();
           this.renderDetailView();
           this.renderStatusBarView();
@@ -572,6 +805,7 @@ export class App {
         case 'g':
         case 'home':
           this.state.selectedIndex = 0;
+          this.renderHeaderBar();
           this.renderTableView();
           this.renderDetailView();
           this.renderStatusBarView();
@@ -581,6 +815,7 @@ export class App {
         case 'G':
         case 'end':
           this.state.selectedIndex = Math.max(0, count - 1);
+          this.renderHeaderBar();
           this.renderTableView();
           this.renderDetailView();
           this.renderStatusBarView();
@@ -589,6 +824,7 @@ export class App {
 
         case 'pageup':
           this.state.selectedIndex = Math.max(0, selectedIndex - 20);
+          this.renderHeaderBar();
           this.renderTableView();
           this.renderDetailView();
           this.renderStatusBarView();
@@ -597,6 +833,7 @@ export class App {
 
         case 'pagedown':
           this.state.selectedIndex = Math.min(count - 1, selectedIndex + 20);
+          this.renderHeaderBar();
           this.renderTableView();
           this.renderDetailView();
           this.renderStatusBarView();
@@ -621,13 +858,16 @@ export class App {
           screen.render();
           break;
 
-        // ── Toggle ──
-        case 'enter':
+        // ── Toggle / Activate ──
         case 't': {
           const entity = filteredEntities[selectedIndex];
           if (entity) {
-            this.client.toggleEntity(entity.entity_id).then(() => {
-              this.showToast(`Toggled: ${entity.entity_id}`);
+            this.client.activateEntity(entity.entity_id).then((acted) => {
+              if (acted) {
+                this.showToast(`Activated: ${entity.entity_id}`);
+              } else {
+                this.showToast(`No action for ${entity.entity_id.split('.')[0]}`, true);
+              }
             }).catch((e: Error) => {
               this.showToast(`Error: ${e.message}`, true);
             });
@@ -648,6 +888,11 @@ export class App {
           this.helpOverlay.show();
           this.helpOverlay.focus();
           screen.render();
+          break;
+
+        // ── Context / home switcher ──
+        case 'C':
+          this.openContextSwitcher();
           break;
 
         // ── Describe panel toggle ──
@@ -692,13 +937,138 @@ export class App {
           break;
         }
 
-        // ── Recent area selector (1–5) ──
+        // ── Brightness / Temp / Volume / Fan speed / Number adjust ──
+        case '+':
+        case '=': {
+          const entity = filteredEntities[selectedIndex];
+          if (entity) void this.handleAdjust(entity, 1);
+          break;
+        }
+
+        case '-': {
+          const entity = filteredEntities[selectedIndex];
+          if (entity) void this.handleAdjust(entity, -1);
+          break;
+        }
+
+        // ── Cover controls ──
+        case 'o': {
+          const entity = filteredEntities[selectedIndex];
+          if (entity?.entity_id.startsWith('cover.')) {
+            this.client.controlCover(entity.entity_id, 'open_cover')
+              .then(() => this.showToast('Opening cover'))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+          }
+          break;
+        }
+
+        case 'c': {
+          const entity = filteredEntities[selectedIndex];
+          if (entity?.entity_id.startsWith('cover.')) {
+            this.client.controlCover(entity.entity_id, 'close_cover')
+              .then(() => this.showToast('Closing cover'))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+          }
+          break;
+        }
+
+        case 's': {
+          const entity = filteredEntities[selectedIndex];
+          if (!entity) break;
+          const sDomain = entity.entity_id.split('.')[0];
+          if (sDomain === 'cover') {
+            this.client.controlCover(entity.entity_id, 'stop_cover')
+              .then(() => this.showToast('Cover stopped'))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+          } else if (sDomain === 'vacuum') {
+            const cmd = entity.state === 'cleaning' ? 'stop' : 'start';
+            this.client.vacuumCommand(entity.entity_id, cmd as 'start' | 'stop')
+              .then(() => this.showToast(`Vacuum: ${cmd}`))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+          }
+          break;
+        }
+
+        // ── Vacuum return to base ──
+        case 'h': {
+          const entity = filteredEntities[selectedIndex];
+          if (entity?.entity_id.startsWith('vacuum.')) {
+            this.client.vacuumCommand(entity.entity_id, 'return_to_base')
+              .then(() => this.showToast('Returning to dock'))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+          }
+          break;
+        }
+
+        // ── Cycle mode (climate HVAC / select option) ──
+        case 'm': {
+          const entity = filteredEntities[selectedIndex];
+          if (!entity) break;
+          const mDomain = entity.entity_id.split('.')[0];
+          if (mDomain === 'climate') {
+            this.client.cycleHvacMode(entity.entity_id)
+              .then(() => this.showToast('HVAC mode changed'))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+          } else if (mDomain === 'select' || mDomain === 'input_select') {
+            this.client.cycleSelectOption(entity.entity_id, 1)
+              .then(() => this.showToast('Option changed'))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+          }
+          break;
+        }
+
+        // ── Media player: previous / next track ──
+        case '[': {
+          const entity = filteredEntities[selectedIndex];
+          if (entity?.entity_id.startsWith('media_player.')) {
+            this.client.mediaPlayerCommand(entity.entity_id, 'media_previous_track')
+              .then(() => this.showToast('Previous track'))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+          }
+          break;
+        }
+
+        case ']': {
+          const entity = filteredEntities[selectedIndex];
+          if (entity?.entity_id.startsWith('media_player.')) {
+            this.client.mediaPlayerCommand(entity.entity_id, 'media_next_track')
+              .then(() => this.showToast('Next track'))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+          }
+          break;
+        }
+
+        // ── Alarm disarm ──
+        case '0': {
+          const entity = filteredEntities[selectedIndex];
+          if (entity?.entity_id.startsWith('alarm_control_panel.')) {
+            this.client.alarmControl(entity.entity_id, 'alarm_disarm')
+              .then(() => this.showToast('Alarm disarmed'))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+          }
+          break;
+        }
+
+        // ── Recent area selector (1–5) / Alarm arm (1–3 when alarm selected) ──
         case '1':
         case '2':
         case '3':
         case '4':
         case '5': {
           const num = parseInt(_ch ?? (key.name as string), 10);
+
+          // Alarm arm modes when an alarm_control_panel entity is selected
+          const selectedEntity = filteredEntities[selectedIndex];
+          if (selectedEntity?.entity_id.startsWith('alarm_control_panel.') && num >= 1 && num <= 3) {
+            const alarmActions = ['alarm_arm_away', 'alarm_arm_home', 'alarm_arm_night'];
+            const action = alarmActions[num - 1];
+            this.client.alarmControl(selectedEntity.entity_id, action)
+              .then(() => this.showToast(`Alarm: ${action.replace('alarm_', '').replace('_', ' ')}`))
+              .catch((e: Error) => this.showToast(`Error: ${e.message}`, true));
+            break;
+          }
+
+          // Otherwise: recent area selector
           const area = this.state.recentAreas[num - 1];
           if (!area) break;
           if (this.state.areaFilter.toLowerCase() === area.toLowerCase()) {
@@ -724,6 +1094,7 @@ export class App {
       // idx 0 is the header row
       if (idx > 0) {
         this.state.selectedIndex = idx - 1;
+        this.renderHeaderBar();
         this.renderDetailView();
         this.renderStatusBarView();
         this.screen.render();
@@ -760,7 +1131,7 @@ export class App {
     let suggestions: string[] = [];
 
     if (this.state.commandMode) {
-      suggestions = computeCommandSuggestions(this.state.commandBuffer, this.state.areas);
+      suggestions = computeCommandSuggestions(this.state.commandBuffer, this.state.areas, this.homes);
     } else if (this.state.filterMode) {
       suggestions = computeFilterSuggestions(
         this.state.filter,
@@ -834,6 +1205,41 @@ export class App {
     return entry?.device_id ?? null;
   }
 
+  private async handleAdjust(entity: HassEntity, direction: 1 | -1): Promise<void> {
+    const domain = entity.entity_id.split('.')[0];
+    try {
+      switch (domain) {
+        case 'light': {
+          const acted = await this.client.adjustBrightness(entity.entity_id, direction * 26);
+          if (acted) this.showToast(`Brightness ${direction > 0 ? '+' : '-'}10%`);
+          break;
+        }
+        case 'climate':
+          await this.client.adjustTemperature(entity.entity_id, direction * 0.5);
+          this.showToast(`Temp ${direction > 0 ? '+' : '-'}0.5°`);
+          break;
+        case 'fan': {
+          const newPct = await this.client.adjustFanSpeed(entity.entity_id, direction);
+          if (newPct !== null) this.showToast(newPct === 0 ? 'Fan turned off' : `Fan speed: ${newPct}%`);
+          break;
+        }
+        case 'media_player':
+          await this.client.adjustVolume(entity.entity_id, direction * 0.1);
+          this.showToast(`Volume ${direction > 0 ? '+' : '-'}10%`);
+          break;
+        case 'number':
+        case 'input_number':
+          await this.client.adjustNumber(entity.entity_id, direction);
+          this.showToast(`Value ${direction > 0 ? 'increased' : 'decreased'}`);
+          break;
+        default:
+          break;
+      }
+    } catch (e) {
+      this.showToast(`Error: ${(e as Error).message}`, true);
+    }
+  }
+
   private async commitInput(): Promise<void> {
     const mode = this.state.inputMode;
     const buffer = this.state.inputBuffer.trim();
@@ -897,6 +1303,26 @@ export class App {
     );
     this.state.recentAreas.unshift(area);
     this.state.recentAreas = this.state.recentAreas.slice(0, 5);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Table mouse-click selection sync
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private bindTableSelect(): void {
+    this.table.on('select item', (_item: blessed.Widgets.BlessedElement, index: number) => {
+      if (this._settingSelection) return;
+      // index 0 is the header row; entity rows start at index 1
+      const entityIndex = index - 1;
+      if (entityIndex < 0 || entityIndex >= this.state.filteredEntities.length) return;
+      if (entityIndex === this.state.selectedIndex) return;
+      this.state.selectedIndex = entityIndex;
+      this.renderHeaderBar();
+      this.renderTableView();
+      this.renderDetailView();
+      this.renderStatusBarView();
+      this.screen.render();
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────

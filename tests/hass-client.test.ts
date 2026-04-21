@@ -601,3 +601,462 @@ describe('HassClient – bulkPower', () => {
     client.disconnect();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Device-specific service methods (unit tests — no WebSocket needed)
+// callService is mocked via jest.spyOn so we test routing / math / clamping.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function makeClientWithEntity(entity_id: string, state: string, attributes: Record<string, unknown> = {}): {
+  client: HassClient;
+  callSpy: jest.SpyInstance;
+} {
+  const client = new HassClient({ url: 'http://localhost:0', token: 'token' });
+  client.entities.set(entity_id, {
+    entity_id,
+    state,
+    attributes: { friendly_name: entity_id, ...attributes },
+    last_changed: new Date().toISOString(),
+    last_updated: new Date().toISOString(),
+    context: { id: 'ctx', parent_id: null, user_id: null },
+  });
+  const callSpy = jest
+    .spyOn(client as unknown as { callService: () => Promise<void> }, 'callService')
+    .mockResolvedValue(undefined);
+  return { client, callSpy };
+}
+
+describe('HassClient – activateEntity', () => {
+  it('toggles a light and returns true', async () => {
+    const { client, callSpy } = makeClientWithEntity('light.desk', 'on');
+    const result = await client.activateEntity('light.desk');
+    expect(result).toBe(true);
+    expect(callSpy).toHaveBeenCalledWith('light', 'toggle', { entity_id: 'light.desk' });
+  });
+
+  it('toggles a switch and returns true', async () => {
+    const { client, callSpy } = makeClientWithEntity('switch.fan', 'off');
+    const result = await client.activateEntity('switch.fan');
+    expect(result).toBe(true);
+    expect(callSpy).toHaveBeenCalledWith('switch', 'toggle', { entity_id: 'switch.fan' });
+  });
+
+  it('returns false for read-only sensor domain', async () => {
+    const { client, callSpy } = makeClientWithEntity('sensor.temp', '21');
+    const result = await client.activateEntity('sensor.temp');
+    expect(result).toBe(false);
+    expect(callSpy).not.toHaveBeenCalled();
+  });
+
+  it('returns false for binary_sensor', async () => {
+    const { client, callSpy } = makeClientWithEntity('binary_sensor.motion', 'off');
+    expect(await client.activateEntity('binary_sensor.motion')).toBe(false);
+    expect(callSpy).not.toHaveBeenCalled();
+  });
+
+  it('presses a button entity', async () => {
+    const { client, callSpy } = makeClientWithEntity('button.restart', 'unknown');
+    const result = await client.activateEntity('button.restart');
+    expect(result).toBe(true);
+    expect(callSpy).toHaveBeenCalledWith('button', 'press', { entity_id: 'button.restart' });
+  });
+
+  it('activates a scene', async () => {
+    const { client, callSpy } = makeClientWithEntity('scene.movie', 'scening');
+    const result = await client.activateEntity('scene.movie');
+    expect(result).toBe(true);
+    expect(callSpy).toHaveBeenCalledWith('scene', 'turn_on', { entity_id: 'scene.movie' });
+  });
+
+  it('turns on a script that is off', async () => {
+    const { client, callSpy } = makeClientWithEntity('script.greet', 'off');
+    await client.activateEntity('script.greet');
+    expect(callSpy).toHaveBeenCalledWith('script', 'turn_on', { entity_id: 'script.greet' });
+  });
+
+  it('turns off a script that is running', async () => {
+    const { client, callSpy } = makeClientWithEntity('script.greet', 'on');
+    await client.activateEntity('script.greet');
+    expect(callSpy).toHaveBeenCalledWith('script', 'turn_off', { entity_id: 'script.greet' });
+  });
+
+  it('starts a vacuum that is not cleaning', async () => {
+    const { client, callSpy } = makeClientWithEntity('vacuum.roomba', 'docked');
+    await client.activateEntity('vacuum.roomba');
+    expect(callSpy).toHaveBeenCalledWith('vacuum', 'start', { entity_id: 'vacuum.roomba' });
+  });
+
+  it('stops a vacuum that is cleaning', async () => {
+    const { client, callSpy } = makeClientWithEntity('vacuum.roomba', 'cleaning');
+    await client.activateEntity('vacuum.roomba');
+    expect(callSpy).toHaveBeenCalledWith('vacuum', 'stop', { entity_id: 'vacuum.roomba' });
+  });
+});
+
+describe('HassClient – adjustBrightness', () => {
+  it('increases brightness by delta', async () => {
+    const { client, callSpy } = makeClientWithEntity('light.desk', 'on', { brightness: 128 });
+    await client.adjustBrightness('light.desk', 26);
+    expect(callSpy).toHaveBeenCalledWith('light', 'turn_on', { entity_id: 'light.desk', brightness: 154 });
+  });
+
+  it('clamps brightness to minimum 1', async () => {
+    const { client, callSpy } = makeClientWithEntity('light.dim', 'on', { brightness: 5 });
+    await client.adjustBrightness('light.dim', -100);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['brightness']).toBe(1);
+  });
+
+  it('clamps brightness to maximum 255', async () => {
+    const { client, callSpy } = makeClientWithEntity('light.bright', 'on', { brightness: 250 });
+    await client.adjustBrightness('light.bright', 100);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['brightness']).toBe(255);
+  });
+
+  it('defaults to 128 when brightness attribute is absent (increment)', async () => {
+    const { client, callSpy } = makeClientWithEntity('light.no_attr', 'on');
+    await client.adjustBrightness('light.no_attr', 10);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['brightness']).toBe(138);
+  });
+
+  it('does nothing when decrementing an off light (prevents turning on at stale brightness)', async () => {
+    const { client, callSpy } = makeClientWithEntity('light.desk', 'off', { brightness: 128 });
+    const result = await client.adjustBrightness('light.desk', -26);
+    expect(callSpy).not.toHaveBeenCalled();
+    expect(result).toBe(false);
+  });
+
+  it('does nothing when decrementing an off light with no brightness attribute', async () => {
+    const { client, callSpy } = makeClientWithEntity('light.desk', 'off');
+    const result = await client.adjustBrightness('light.desk', -26);
+    expect(callSpy).not.toHaveBeenCalled();
+    expect(result).toBe(false);
+  });
+});
+
+describe('HassClient – adjustTemperature', () => {
+  it('increases temperature by 0.5', async () => {
+    const { client, callSpy } = makeClientWithEntity('climate.hall', 'heat', { temperature: 20 });
+    await client.adjustTemperature('climate.hall', 0.5);
+    expect(callSpy).toHaveBeenCalledWith('climate', 'set_temperature', {
+      entity_id: 'climate.hall',
+      temperature: 20.5,
+    });
+  });
+
+  it('decreases temperature and rounds to nearest 0.5', async () => {
+    const { client, callSpy } = makeClientWithEntity('climate.hall', 'heat', { temperature: 21 });
+    await client.adjustTemperature('climate.hall', -0.5);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['temperature']).toBe(20.5);
+  });
+});
+
+describe('HassClient – cycleHvacMode', () => {
+  it('cycles to the next HVAC mode', async () => {
+    const { client, callSpy } = makeClientWithEntity('climate.ac', 'cool', {
+      hvac_modes: ['off', 'cool', 'heat'],
+    });
+    await client.cycleHvacMode('climate.ac');
+    expect(callSpy).toHaveBeenCalledWith('climate', 'set_hvac_mode', {
+      entity_id: 'climate.ac',
+      hvac_mode: 'heat',
+    });
+  });
+
+  it('wraps around to first mode from last', async () => {
+    const { client, callSpy } = makeClientWithEntity('climate.ac', 'heat', {
+      hvac_modes: ['off', 'cool', 'heat'],
+    });
+    await client.cycleHvacMode('climate.ac');
+    expect(callSpy).toHaveBeenCalledWith('climate', 'set_hvac_mode', {
+      entity_id: 'climate.ac',
+      hvac_mode: 'off',
+    });
+  });
+
+  it('does nothing when only one HVAC mode exists', async () => {
+    const { client, callSpy } = makeClientWithEntity('climate.simple', 'heat', {
+      hvac_modes: ['heat'],
+    });
+    await client.cycleHvacMode('climate.simple');
+    expect(callSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('HassClient – controlCover', () => {
+  it('sends open_cover service', async () => {
+    const { client, callSpy } = makeClientWithEntity('cover.garage', 'closed');
+    await client.controlCover('cover.garage', 'open_cover');
+    expect(callSpy).toHaveBeenCalledWith('cover', 'open_cover', { entity_id: 'cover.garage' });
+  });
+
+  it('sends close_cover service', async () => {
+    const { client, callSpy } = makeClientWithEntity('cover.garage', 'open');
+    await client.controlCover('cover.garage', 'close_cover');
+    expect(callSpy).toHaveBeenCalledWith('cover', 'close_cover', { entity_id: 'cover.garage' });
+  });
+
+  it('sends stop_cover service', async () => {
+    const { client, callSpy } = makeClientWithEntity('cover.garage', 'opening');
+    await client.controlCover('cover.garage', 'stop_cover');
+    expect(callSpy).toHaveBeenCalledWith('cover', 'stop_cover', { entity_id: 'cover.garage' });
+  });
+});
+
+describe('HassClient – adjustFanSpeed', () => {
+  it('does nothing when decrementing an already-off fan', async () => {
+    const { client, callSpy } = makeClientWithEntity('fan.ceiling', 'off', { percentage: 100, percentage_step: 25 });
+    const result = await client.adjustFanSpeed('fan.ceiling', -1);
+    expect(callSpy).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
+
+  it('snaps to step grid before applying delta (avoids off-grid starting values)', async () => {
+    // HA reports percentage: 33 (off-grid for step 25); snapped = 25, then +1 step = 50
+    const { client, callSpy } = makeClientWithEntity('fan.ceiling', 'on', { percentage: 33, percentage_step: 25 });
+    const result = await client.adjustFanSpeed('fan.ceiling', 1);
+    expect(callSpy).toHaveBeenCalledWith('fan', 'set_percentage', {
+      entity_id: 'fan.ceiling',
+      percentage: 50,
+    });
+    expect(result).toBe(50);
+  });
+
+  it('increases fan speed by one percentage_step', async () => {
+    const { client, callSpy } = makeClientWithEntity('fan.ceiling', 'on', { percentage: 50, percentage_step: 25 });
+    const result = await client.adjustFanSpeed('fan.ceiling', 1);
+    expect(callSpy).toHaveBeenCalledWith('fan', 'set_percentage', {
+      entity_id: 'fan.ceiling',
+      percentage: 75,
+    });
+    expect(result).toBe(75);
+  });
+
+  it('decreases fan speed by one percentage_step', async () => {
+    const { client, callSpy } = makeClientWithEntity('fan.ceiling', 'on', { percentage: 75, percentage_step: 25 });
+    const result = await client.adjustFanSpeed('fan.ceiling', -1);
+    expect(callSpy).toHaveBeenCalledWith('fan', 'set_percentage', {
+      entity_id: 'fan.ceiling',
+      percentage: 50,
+    });
+    expect(result).toBe(50);
+  });
+
+  it('calls turn_off and returns 0 when speed steps down to 0', async () => {
+    const { client, callSpy } = makeClientWithEntity('fan.ceiling', 'on', { percentage: 25, percentage_step: 25 });
+    const result = await client.adjustFanSpeed('fan.ceiling', -1);
+    expect(callSpy).toHaveBeenCalledWith('fan', 'turn_off', { entity_id: 'fan.ceiling' });
+    expect(result).toBe(0);
+  });
+
+  it('defaults to step 25 when percentage_step attribute is absent', async () => {
+    const { client, callSpy } = makeClientWithEntity('fan.simple', 'on', { percentage: 50 });
+    await client.adjustFanSpeed('fan.simple', 1);
+    expect(callSpy).toHaveBeenCalledWith('fan', 'set_percentage', {
+      entity_id: 'fan.simple',
+      percentage: 75,
+    });
+  });
+
+  it('clamps fan speed to maximum 100', async () => {
+    const { client, callSpy } = makeClientWithEntity('fan.ceiling', 'on', { percentage: 100, percentage_step: 25 });
+    const result = await client.adjustFanSpeed('fan.ceiling', 1);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['percentage']).toBe(100);
+    expect(result).toBe(100);
+  });
+});
+
+describe('HassClient – adjustVolume', () => {
+  it('increases volume by 0.1', async () => {
+    const { client, callSpy } = makeClientWithEntity('media_player.tv', 'playing', { volume_level: 0.5 });
+    await client.adjustVolume('media_player.tv', 0.1);
+    expect(callSpy).toHaveBeenCalledWith('media_player', 'volume_set', {
+      entity_id: 'media_player.tv',
+      volume_level: 0.6,
+    });
+  });
+
+  it('clamps volume to minimum 0', async () => {
+    const { client, callSpy } = makeClientWithEntity('media_player.tv', 'playing', { volume_level: 0.05 });
+    await client.adjustVolume('media_player.tv', -0.5);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['volume_level']).toBe(0);
+  });
+
+  it('clamps volume to maximum 1', async () => {
+    const { client, callSpy } = makeClientWithEntity('media_player.tv', 'playing', { volume_level: 0.95 });
+    await client.adjustVolume('media_player.tv', 0.5);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['volume_level']).toBe(1);
+  });
+});
+
+describe('HassClient – mediaPlayerCommand', () => {
+  it('sends media_next_track', async () => {
+    const { client, callSpy } = makeClientWithEntity('media_player.speaker', 'playing');
+    await client.mediaPlayerCommand('media_player.speaker', 'media_next_track');
+    expect(callSpy).toHaveBeenCalledWith('media_player', 'media_next_track', {
+      entity_id: 'media_player.speaker',
+    });
+  });
+
+  it('sends media_previous_track', async () => {
+    const { client, callSpy } = makeClientWithEntity('media_player.speaker', 'playing');
+    await client.mediaPlayerCommand('media_player.speaker', 'media_previous_track');
+    expect(callSpy).toHaveBeenCalledWith('media_player', 'media_previous_track', {
+      entity_id: 'media_player.speaker',
+    });
+  });
+});
+
+describe('HassClient – vacuumCommand', () => {
+  it('sends start command', async () => {
+    const { client, callSpy } = makeClientWithEntity('vacuum.roomba', 'docked');
+    await client.vacuumCommand('vacuum.roomba', 'start');
+    expect(callSpy).toHaveBeenCalledWith('vacuum', 'start', { entity_id: 'vacuum.roomba' });
+  });
+
+  it('sends return_to_base command', async () => {
+    const { client, callSpy } = makeClientWithEntity('vacuum.roomba', 'cleaning');
+    await client.vacuumCommand('vacuum.roomba', 'return_to_base');
+    expect(callSpy).toHaveBeenCalledWith('vacuum', 'return_to_base', { entity_id: 'vacuum.roomba' });
+  });
+});
+
+describe('HassClient – alarmControl', () => {
+  it('sends alarm_disarm without code', async () => {
+    const { client, callSpy } = makeClientWithEntity('alarm_control_panel.home', 'armed_away');
+    await client.alarmControl('alarm_control_panel.home', 'alarm_disarm');
+    expect(callSpy).toHaveBeenCalledWith('alarm_control_panel', 'alarm_disarm', {
+      entity_id: 'alarm_control_panel.home',
+    });
+  });
+
+  it('includes code in service_data when provided', async () => {
+    const { client, callSpy } = makeClientWithEntity('alarm_control_panel.home', 'disarmed');
+    await client.alarmControl('alarm_control_panel.home', 'alarm_arm_away', '1234');
+    expect(callSpy).toHaveBeenCalledWith('alarm_control_panel', 'alarm_arm_away', {
+      entity_id: 'alarm_control_panel.home',
+      code: '1234',
+    });
+  });
+});
+
+describe('HassClient – adjustNumber', () => {
+  it('increases value by step', async () => {
+    const { client, callSpy } = makeClientWithEntity('number.volume', '50', {
+      step: 5, min: 0, max: 100,
+    });
+    await client.adjustNumber('number.volume', 1);
+    expect(callSpy).toHaveBeenCalledWith('number', 'set_value', {
+      entity_id: 'number.volume',
+      value: 55,
+    });
+  });
+
+  it('decreases value by step', async () => {
+    const { client, callSpy } = makeClientWithEntity('number.volume', '50', {
+      step: 5, min: 0, max: 100,
+    });
+    await client.adjustNumber('number.volume', -1);
+    expect(callSpy).toHaveBeenCalledWith('number', 'set_value', {
+      entity_id: 'number.volume',
+      value: 45,
+    });
+  });
+
+  it('clamps to minimum', async () => {
+    const { client, callSpy } = makeClientWithEntity('number.volume', '2', {
+      step: 5, min: 0, max: 100,
+    });
+    await client.adjustNumber('number.volume', -1);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['value']).toBe(0);
+  });
+
+  it('clamps to maximum', async () => {
+    const { client, callSpy } = makeClientWithEntity('number.volume', '98', {
+      step: 5, min: 0, max: 100,
+    });
+    await client.adjustNumber('number.volume', 1);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['value']).toBe(100);
+  });
+
+  it('works for input_number domain', async () => {
+    const { client, callSpy } = makeClientWithEntity('input_number.threshold', '10', {
+      step: 1, min: 0, max: 20,
+    });
+    await client.adjustNumber('input_number.threshold', 1);
+    expect(callSpy).toHaveBeenCalledWith('input_number', 'set_value', {
+      entity_id: 'input_number.threshold',
+      value: 11,
+    });
+  });
+});
+
+describe('HassClient – cycleSelectOption', () => {
+  it('moves to next option', async () => {
+    const { client, callSpy } = makeClientWithEntity('select.source', 'HDMI 1', {
+      options: ['HDMI 1', 'HDMI 2', 'AV'],
+    });
+    await client.cycleSelectOption('select.source', 1);
+    expect(callSpy).toHaveBeenCalledWith('select', 'select_option', {
+      entity_id: 'select.source',
+      option: 'HDMI 2',
+    });
+  });
+
+  it('moves to previous option', async () => {
+    const { client, callSpy } = makeClientWithEntity('select.source', 'HDMI 2', {
+      options: ['HDMI 1', 'HDMI 2', 'AV'],
+    });
+    await client.cycleSelectOption('select.source', -1);
+    expect(callSpy).toHaveBeenCalledWith('select', 'select_option', {
+      entity_id: 'select.source',
+      option: 'HDMI 1',
+    });
+  });
+
+  it('wraps forward from last to first option', async () => {
+    const { client, callSpy } = makeClientWithEntity('select.source', 'AV', {
+      options: ['HDMI 1', 'HDMI 2', 'AV'],
+    });
+    await client.cycleSelectOption('select.source', 1);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['option']).toBe('HDMI 1');
+  });
+
+  it('wraps backward from first to last option', async () => {
+    const { client, callSpy } = makeClientWithEntity('select.source', 'HDMI 1', {
+      options: ['HDMI 1', 'HDMI 2', 'AV'],
+    });
+    await client.cycleSelectOption('select.source', -1);
+    const args = callSpy.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(args[2]['option']).toBe('AV');
+  });
+
+  it('does nothing when fewer than 2 options exist', async () => {
+    const { client, callSpy } = makeClientWithEntity('select.single', 'Only', {
+      options: ['Only'],
+    });
+    await client.cycleSelectOption('select.single', 1);
+    expect(callSpy).not.toHaveBeenCalled();
+  });
+
+  it('works for input_select domain', async () => {
+    const { client, callSpy } = makeClientWithEntity('input_select.mode', 'Auto', {
+      options: ['Auto', 'Manual'],
+    });
+    await client.cycleSelectOption('input_select.mode', 1);
+    expect(callSpy).toHaveBeenCalledWith('input_select', 'select_option', {
+      entity_id: 'input_select.mode',
+      option: 'Manual',
+    });
+  });
+});
+

@@ -73,7 +73,7 @@ export function createTable(screen: blessed.Widgets.Screen): blessed.Widgets.Lis
     left: 0,
     width: '70%',
     bottom: 2,
-    keys: true,
+    keys: false,
     mouse: true,
     scrollable: true,
     scrollbar: {
@@ -208,6 +208,32 @@ export function createToast(screen: blessed.Widgets.Screen): blessed.Widgets.Box
       border: { fg: COLORS.green },
     },
     padding: { left: 1, right: 1 },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Context / home switcher overlay  (k9s-style)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function createContextOverlay(screen: blessed.Widgets.Screen): blessed.Widgets.BoxElement {
+  return blessed.box({
+    parent: screen,
+    top: 'center',
+    left: 'center',
+    width: 60,
+    height: 14,
+    hidden: true,
+    tags: true,
+    border: { type: 'line' },
+    scrollable: true,
+    keys: true,
+    mouse: true,
+    style: {
+      bg: COLORS.bgPanel,
+      fg: COLORS.textPrimary,
+      border: { fg: COLORS.cyan },
+    },
+    padding: { left: 2, right: 2, top: 0, bottom: 0 },
   });
 }
 

@@ -1,6 +1,21 @@
 export interface HassConfig {
+  /** Display name shown in the context switcher. Falls back to the URL hostname when omitted. */
+  name?: string;
   url: string;
   token: string;
+}
+
+/**
+ * Shape of ~/.config/hatui/config.json.
+ * Supports both single-home (legacy) and multi-home formats.
+ */
+export interface HassConfigFile {
+  /** Multi-home: array of home configurations. */
+  homes?: Array<{ name?: string; url: string; token: string }>;
+  /** Legacy single-home: url at the top level. */
+  url?: string;
+  /** Legacy single-home: token at the top level. */
+  token?: string;
 }
 
 export interface HassEntity {
@@ -177,4 +192,9 @@ export interface AppState {
   inputBuffer: string;
   // ── recent areas (k9s-style selector) ─────────────────────────────────
   recentAreas: string[];
+  // ── context / home switcher ───────────────────────────────────────────
+  contextMode: boolean;
+  homes: HassConfig[];
+  activeHomeIndex: number;
+  contextSelectedIndex: number;
 }

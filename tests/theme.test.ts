@@ -212,4 +212,9 @@ describe('timeSince', () => {
     const date = new Date('2025-01-01T12:00:00.000Z').toISOString();
     expect(timeSince(date)).toBe('0s');
   });
+
+  it('returns 0s for a timestamp slightly in the future (clock skew)', () => {
+    const date = new Date('2025-01-01T12:00:05.000Z').toISOString();
+    expect(timeSince(date)).toBe('0s');
+  });
 });

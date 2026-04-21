@@ -166,7 +166,7 @@ export function formatState(entity: { state: string; attributes: Record<string, 
 // Duration since last change
 export function timeSince(isoDate: string): string {
   const diff = Date.now() - new Date(isoDate).getTime();
-  const s = Math.floor(diff / 1000);
+  const s = Math.max(0, Math.floor(diff / 1000));
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m`;

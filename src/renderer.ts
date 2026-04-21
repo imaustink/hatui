@@ -1,4 +1,4 @@
-import { HassEntity, HassArea, DeviceType, DEVICE_TYPE_DOMAINS, AppState, DEVICE_TYPE_SHORTCUTS } from './types';
+import { HassEntity, HassArea, HassConfig, DeviceType, DEVICE_TYPE_DOMAINS, AppState, DEVICE_TYPE_SHORTCUTS } from './types';
 import {
   COLORS,
   domainIcon,
@@ -7,6 +7,18 @@ import {
   stateColor,
   timeSince,
 } from './theme';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** k9s-style shortcut badge: highlighted key + dim label. */
+function badge(key: string, label: string): string {
+  return (
+    `{bold}{${COLORS.bgSelected}-bg}{${COLORS.cyan}-fg}${key}{/}` +
+    `{${COLORS.textSecondary}-fg} ${label}{/}`
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Logo / header art
@@ -24,14 +36,6 @@ export const LOGO_ART = [
 // ─────────────────────────────────────────────────────────────────────────────
 // Header render  (3-line k9s-style)
 // ─────────────────────────────────────────────────────────────────────────────
-
-/** Render a k9s-style shortcut badge: highlighted key + dim label. */
-function badge(key: string, label: string): string {
-  return (
-    `{bold}{${COLORS.bgSelected}-bg}{${COLORS.cyan}-fg}${key}{/}` +
-    `{${COLORS.textSecondary}-fg} ${label}{/}`
-  );
-}
 
 /** Render the k9s-style numbered recent-area selector line. */
 function renderRecentAreasLine(recentAreas: string[], activeArea: string): string {
@@ -71,8 +75,15 @@ export function renderHeader(state: AppState, width: number): string {
   const title = `{bold}{${COLORS.magenta}-fg} HA{/}{bold}{${COLORS.cyan}-fg}TUI{/}`;
   const sep = `{${COLORS.border}-fg}│{/}`;
 
-  // ── Line 1: title bar ──────────────────────────────────────────────────────
-  const line1 = ` ${title}  ${sep}  ${connIcon}  ${sep}  ${countLabel}  ${sep}  ${timeLabel} `;
+  // Active home name indicator (k9s-style context badge)
+  const activeHome = state.homes[state.activeHomeIndex];
+  const homeLabel = activeHome
+    ? `{${COLORS.bgSelected}-bg}{${COLORS.cyan}-fg} ${activeHome.name ?? new URL(activeHome.url).hostname} {/}`
+    : '';
+
+  // ── Line 1: title bar ───────────────────────────────────────────────────
+  const homePart = homeLabel ? `  ${sep}  ${homeLabel}` : '';
+  const line1 = ` ${title}  ${sep}  ${connIcon}${homePart}  ${sep}  ${countLabel}  ${sep}  ${timeLabel} `;
 
   if (width < 60) {
     return line1;
@@ -103,13 +114,17 @@ export function renderHeader(state: AppState, width: number): string {
     badge('<r>', 'Refresh'),
     badge('</>', 'Filter'),
     badge('<y>', 'Yank'),
+    badge('<C>', 'Context'),
     badge('<?>', 'Help'),
     badge('<q>', 'Quit'),
   ];
 
   const gap = '  ';
   const line3 = ' ' + viewBadges.join(gap);
-  const line4 = ' ' + actionBadges.join(gap);
+
+  // ── Line 4: dynamic device-specific control hints ─────────────────────────
+  const selected = state.filteredEntities[state.selectedIndex] ?? null;
+  const line4 = renderNormalHints(selected, width);
 
   return `${line1}\n${line2}\n${line3}\n${line4}`;
 }
@@ -134,7 +149,7 @@ export function renderTableHeader(tableInnerWidth: number): string {
   const cols = computeCols(tableInnerWidth);
   let row = ` ${pad('', COL_ICON)}  ${pad('NAME', cols.name)}  ${pad('STATE', cols.state)}`;
   if (cols.area > 0) row += `  ${pad('AREA', cols.area)}`;
-  if (cols.age  > 0) row += `  ${pad('AGE',  cols.age)}`;
+  if (cols.age  > 0) row += `  ${pad('CHG',  cols.age)}`;
   return `{bold}{${COLORS.textDim}-fg}${row}{/}`;
 }
 
@@ -239,18 +254,156 @@ export function renderDetail(entity: HassEntity | null, panelInnerWidth = 30): s
     lines.push(`{${COLORS.textSecondary}-fg}${truncate(key, keyW).padEnd(keyW)} {/}{${COLORS.textPrimary}-fg}${truncate(valStr, valW)}{/}`);
   }
 
-  lines.push('');
-  lines.push(`{bold}{${COLORS.textSecondary}-fg}ACTIONS{/}`);
-  lines.push(`{${COLORS.border}-fg}${'─'.repeat(26)}{/}`);
-
-  const toggleable = ['light', 'switch', 'fan', 'cover', 'media_player', 'lock', 'automation', 'input_boolean'];
-  if (toggleable.includes(domain)) {
-    lines.push(`{${COLORS.green}-fg}[t]{/} Toggle`);
-  }
-  lines.push(`{${COLORS.yellow}-fg}[y]{/} Copy entity_id`);
-  lines.push(`{${COLORS.cyan}-fg}[?]{/} Help`);
+  lines.push(...renderEntityControls(entity, hrLen));
 
   return lines.join('\n');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain-aware controls for the detail panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+function renderEntityControls(entity: HassEntity, hrLen: number): string[] {
+  const domain = entity.entity_id.split('.')[0];
+  const lines: string[] = [];
+
+  lines.push('');
+  lines.push(`{bold}{${COLORS.textSecondary}-fg}CONTROLS{/}`);
+  lines.push(`{${COLORS.border}-fg}${'─'.repeat(hrLen)}{/}`);
+
+  const READ_ONLY = new Set([
+    'sensor', 'binary_sensor', 'weather', 'sun', 'person',
+    'device_tracker', 'zone', 'camera', 'update', 'calendar',
+    'timer', 'counter', 'group',
+  ]);
+
+  if (READ_ONLY.has(domain)) {
+    lines.push(`{${COLORS.textDim}-fg}Read-only — no controls{/}`);
+    lines.push(`{${COLORS.yellow}-fg}[y]{/} {${COLORS.textSecondary}-fg}Copy entity_id{/}`);
+    return lines;
+  }
+
+  switch (domain) {
+    case 'light': {
+      lines.push(`{${COLORS.green}-fg}[t]{/} {${COLORS.textSecondary}-fg}Toggle{/}`);
+      const colorModes = entity.attributes['supported_color_modes'] as string[] | undefined;
+      const brightness = entity.attributes['brightness'] as number | undefined;
+      const hasBrightness =
+        brightness !== undefined ||
+        colorModes?.some((m) =>
+          ['brightness', 'color_temp', 'hs', 'xy', 'rgb', 'rgbw', 'rgbww', 'white'].includes(m)
+        );
+      if (hasBrightness) {
+        const pct = brightness !== undefined ? Math.round((brightness / 255) * 100) : '—';
+        lines.push(`{${COLORS.yellow}-fg}[+/-]{/} {${COLORS.textSecondary}-fg}Brightness (${pct}%){/}`);
+      }
+      break;
+    }
+
+    case 'switch':
+    case 'input_boolean':
+      lines.push(`{${COLORS.green}-fg}[t]{/} {${COLORS.textSecondary}-fg}Toggle{/}`);
+      break;
+
+    case 'climate': {
+      const temp = entity.attributes['temperature'] as number | undefined;
+      const currentTemp = entity.attributes['current_temperature'] as number | undefined;
+      const hvacModes = entity.attributes['hvac_modes'] as string[] | undefined;
+      lines.push(`{${COLORS.yellow}-fg}[+/-]{/} {${COLORS.textSecondary}-fg}Set temp${temp !== undefined ? ` (now: ${temp}°)` : ''}{/}`);
+      if (currentTemp !== undefined) {
+        lines.push(`{${COLORS.textDim}-fg}      Current: ${currentTemp}°{/}`);
+      }
+      if (hvacModes && hvacModes.length > 1) {
+        lines.push(`{${COLORS.cyan}-fg}[m]{/} {${COLORS.textSecondary}-fg}Mode: ${entity.state}{/}`);
+        lines.push(`{${COLORS.textDim}-fg}      ${hvacModes.join(', ')}{/}`);
+      }
+      break;
+    }
+
+    case 'cover':
+      lines.push(`{${COLORS.green}-fg}[o]{/} {${COLORS.textSecondary}-fg}Open${entity.state === 'open' ? ' ✓' : ''}{/}`);
+      lines.push(`{${COLORS.red}-fg}[c]{/} {${COLORS.textSecondary}-fg}Close${entity.state === 'closed' ? ' ✓' : ''}{/}`);
+      lines.push(`{${COLORS.yellow}-fg}[s]{/} {${COLORS.textSecondary}-fg}Stop{/}`);
+      break;
+
+    case 'fan': {
+      lines.push(`{${COLORS.green}-fg}[t]{/} {${COLORS.textSecondary}-fg}Toggle{/}`);
+      const pct = entity.attributes['percentage'] as number | undefined;
+      if (pct !== undefined) {
+        lines.push(`{${COLORS.yellow}-fg}[+/-]{/} {${COLORS.textSecondary}-fg}Speed (${pct}%){/}`);
+      }
+      break;
+    }
+
+    case 'media_player': {
+      const isPlaying = entity.state === 'playing';
+      lines.push(`{${COLORS.green}-fg}[t]{/} {${COLORS.textSecondary}-fg}${isPlaying ? 'Pause' : 'Play'}{/}`);
+      lines.push(`{${COLORS.yellow}-fg}[+/-]{/} {${COLORS.textSecondary}-fg}Volume{/}`);
+      lines.push(`{${COLORS.cyan}-fg}[[ / ]]{/} {${COLORS.textSecondary}-fg}Prev / Next track{/}`);
+      break;
+    }
+
+    case 'lock':
+      lines.push(`{${COLORS.green}-fg}[t]{/} {${COLORS.textSecondary}-fg}${entity.state === 'locked' ? 'Unlock' : 'Lock'}{/}`);
+      break;
+
+    case 'vacuum':
+      if (entity.state === 'cleaning') {
+        lines.push(`{${COLORS.yellow}-fg}[s]{/} {${COLORS.textSecondary}-fg}Stop{/}`);
+      } else {
+        lines.push(`{${COLORS.green}-fg}[s]{/} {${COLORS.textSecondary}-fg}Start{/}`);
+      }
+      lines.push(`{${COLORS.cyan}-fg}[h]{/} {${COLORS.textSecondary}-fg}Return to dock{/}`);
+      break;
+
+    case 'alarm_control_panel':
+      lines.push(`{${COLORS.green}-fg}[0]{/} {${COLORS.textSecondary}-fg}Disarm${entity.state === 'disarmed' ? ' ✓' : ''}{/}`);
+      lines.push(`{${COLORS.yellow}-fg}[1]{/} {${COLORS.textSecondary}-fg}Arm Away${entity.state === 'armed_away' ? ' ✓' : ''}{/}`);
+      lines.push(`{${COLORS.orange}-fg}[2]{/} {${COLORS.textSecondary}-fg}Arm Home${entity.state === 'armed_home' ? ' ✓' : ''}{/}`);
+      lines.push(`{${COLORS.purple}-fg}[3]{/} {${COLORS.textSecondary}-fg}Arm Night${entity.state === 'armed_night' ? ' ✓' : ''}{/}`);
+      break;
+
+    case 'scene':
+    case 'script':
+    case 'button':
+    case 'input_button':
+      lines.push(`{${COLORS.green}-fg}[t]{/} {${COLORS.textSecondary}-fg}Activate{/}`);
+      break;
+
+    case 'automation':
+      lines.push(`{${COLORS.green}-fg}[t]{/} {${COLORS.textSecondary}-fg}Toggle{/}`);
+      break;
+
+    case 'number':
+    case 'input_number': {
+      const step = entity.attributes['step'] as number | undefined;
+      const min = entity.attributes['min'] as number | undefined;
+      const max = entity.attributes['max'] as number | undefined;
+      lines.push(`{${COLORS.yellow}-fg}[+/-]{/} {${COLORS.textSecondary}-fg}Value: ${entity.state}${step !== undefined ? ` (step: ${step})` : ''}{/}`);
+      if (min !== undefined && max !== undefined) {
+        lines.push(`{${COLORS.textDim}-fg}      Range: ${min} – ${max}{/}`);
+      }
+      break;
+    }
+
+    case 'select':
+    case 'input_select': {
+      const options = entity.attributes['options'] as string[] | undefined;
+      lines.push(`{${COLORS.yellow}-fg}[m]{/} {${COLORS.textSecondary}-fg}Option: ${entity.state}{/}`);
+      if (options && options.length > 0) {
+        const preview = options.slice(0, 4).join(', ') + (options.length > 4 ? '…' : '');
+        lines.push(`{${COLORS.textDim}-fg}      ${preview}{/}`);
+      }
+      break;
+    }
+
+    default:
+      lines.push(`{${COLORS.textDim}-fg}No controls{/}`);
+      break;
+  }
+
+  lines.push(`{${COLORS.yellow}-fg}[y]{/} {${COLORS.textSecondary}-fg}Copy entity_id{/}`);
+  return lines;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -258,6 +411,12 @@ export function renderDetail(entity: HassEntity | null, panelInnerWidth = 30): s
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function renderCommandBar(state: AppState, termWidth = 120): string {
+  if (state.contextMode) {
+    return (
+      `{bold}{${COLORS.cyan}-fg}⌂ CONTEXTS{/}` +
+      `  {${COLORS.textDim}-fg}↑↓/j/k navigate   ENTER switch   q/ESC cancel{/}`
+    );
+  }
   if (state.inputMode === 'rename') {
     return (
       `{bold}{${COLORS.magenta}-fg}Rename >{/} {${COLORS.textPrimary}-fg}${state.inputBuffer}{/}{${COLORS.magenta}-fg}█{/}` +
@@ -296,8 +455,147 @@ export function renderCommandBar(state: AppState, termWidth = 120): string {
       `  {${COLORS.textDim}-fg}TAB:complete  ESC:clear{/}`
     );
   }
-  // Normal mode — hints live in the header; keep the bar empty.
+  // Normal mode — hints are shown in the header; keep the bar empty.
   return '';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Normal-mode command bar: dynamic device hints
+// ─────────────────────────────────────────────────────────────────────────────
+
+const READ_ONLY_DOMAINS = new Set([
+  'sensor', 'binary_sensor', 'weather', 'sun', 'person',
+  'device_tracker', 'zone', 'camera', 'update', 'calendar',
+  'timer', 'counter', 'group',
+]);
+
+function renderNormalHints(entity: HassEntity | null, _termWidth: number): string {
+  const gap = '  ';
+  const sep = `{${COLORS.border}-fg}│{/}`;
+
+  // Universal trailing badges shown for every entity
+  const universal = [
+    badge('<d>', 'Describe'),
+    badge('<n>', 'Rename'),
+    badge('<a>', 'Area'),
+    badge('</>', 'Filter'),
+    badge('<C>', 'Context'),
+    badge('<?>', 'Help'),
+    badge('<q>', 'Quit'),
+  ];
+
+  if (!entity) {
+    return [badge('<:>', 'Command'), ...universal].join(gap);
+  }
+
+  const domain = entity.entity_id.split('.')[0];
+  const domainBadges: string[] = [];
+
+  if (READ_ONLY_DOMAINS.has(domain)) {
+    domainBadges.push(badge('<y>', 'Copy'));
+  } else {
+    switch (domain) {
+      case 'light': {
+        domainBadges.push(badge('<t>', 'Toggle'));
+        const colorModes = entity.attributes['supported_color_modes'] as string[] | undefined;
+        const brightness  = entity.attributes['brightness'] as number | undefined;
+        const hasBrightness =
+          brightness !== undefined ||
+          colorModes?.some((m) =>
+            ['brightness', 'color_temp', 'hs', 'xy', 'rgb', 'rgbw', 'rgbww', 'white'].includes(m)
+          );
+        if (hasBrightness) {
+          const pct = brightness !== undefined ? `${Math.round((brightness / 255) * 100)}%` : '—%';
+          domainBadges.push(badge('<+/->', `Brightness ${pct}`));
+        }
+        break;
+      }
+
+      case 'switch':
+      case 'input_boolean':
+        domainBadges.push(badge('<t>', 'Toggle'));
+        break;
+
+      case 'climate': {
+        const temp = entity.attributes['temperature'] as number | undefined;
+        const hvacModes = entity.attributes['hvac_modes'] as string[] | undefined;
+        domainBadges.push(badge('<+/->', temp !== undefined ? `Temp (${temp}°)` : 'Temp'));
+        if (hvacModes && hvacModes.length > 1) {
+          domainBadges.push(badge('<m>', `Mode: ${entity.state}`));
+        }
+        break;
+      }
+
+      case 'cover':
+        domainBadges.push(badge('<o>', 'Open'));
+        domainBadges.push(badge('<c>', 'Close'));
+        domainBadges.push(badge('<s>', 'Stop'));
+        break;
+
+      case 'fan': {
+        domainBadges.push(badge('<t>', 'Toggle'));
+        const pct = entity.attributes['percentage'] as number | undefined;
+        if (pct !== undefined) {
+          domainBadges.push(badge('<+/->', `Speed (${pct}%)`));
+        }
+        break;
+      }
+
+      case 'media_player': {
+        const isPlaying = entity.state === 'playing';
+        domainBadges.push(badge('<t>', isPlaying ? 'Pause' : 'Play'));
+        domainBadges.push(badge('<+/->', 'Volume'));
+        domainBadges.push(badge('<[/]>', 'Track'));
+        break;
+      }
+
+      case 'lock':
+        domainBadges.push(badge('<t>', entity.state === 'locked' ? 'Unlock' : 'Lock'));
+        break;
+
+      case 'vacuum':
+        domainBadges.push(badge('<s>', entity.state === 'cleaning' ? 'Stop' : 'Start'));
+        domainBadges.push(badge('<h>', 'Dock'));
+        break;
+
+      case 'alarm_control_panel':
+        domainBadges.push(badge('<0>', 'Disarm'));
+        domainBadges.push(badge('<1>', 'Away'));
+        domainBadges.push(badge('<2>', 'Home'));
+        domainBadges.push(badge('<3>', 'Night'));
+        break;
+
+      case 'scene':
+      case 'script':
+      case 'button':
+      case 'input_button':
+        domainBadges.push(badge('<t>', 'Activate'));
+        break;
+
+      case 'automation':
+        domainBadges.push(badge('<t>', 'Toggle'));
+        break;
+
+      case 'number':
+      case 'input_number': {
+        const step = entity.attributes['step'] as number | undefined;
+        domainBadges.push(badge('<+/->', step !== undefined ? `Value (step: ${step})` : 'Value'));
+        break;
+      }
+
+      case 'select':
+      case 'input_select':
+        domainBadges.push(badge('<m>', `Option: ${entity.state}`));
+        break;
+
+      default:
+        break;
+    }
+    domainBadges.push(badge('<y>', 'Copy'));
+  }
+
+  const allBadges = [...domainBadges, sep, ...universal];
+  return ' ' + allBadges.join(gap);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -322,6 +620,106 @@ export function renderStatusBar(state: AppState): string {
     `{${COLORS.textPrimary}-fg}${friendlyName(sel)} {/}` +
     `{${COLORS.textDim}-fg}│ {/}` +
     `{${stateCol}-fg}${sel.state}{/}`
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Context / home switcher — inline table view (k9s-style)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function contextCols(innerWidth: number): { name: number; url: number } {
+  const nameW = Math.min(28, Math.max(14, Math.floor(innerWidth * 0.30)));
+  const urlW  = Math.max(16, innerWidth - nameW - 14);
+  return { name: nameW, url: urlW };
+}
+
+export function renderContextTableHeader(tableInnerWidth: number): string {
+  const cols = contextCols(tableInnerWidth);
+  return (
+    `{bold}{${COLORS.textDim}-fg}` +
+    `   ${''.padEnd(2)}  ${pad('NAME', cols.name)}  ${pad('URL', cols.url)}  ${'STATUS'.padEnd(8)}` +
+    `{/}`
+  );
+}
+
+export function renderContextRow(
+  home: HassConfig,
+  isActive: boolean,
+  isSelected: boolean,
+  tableInnerWidth: number
+): string {
+  const cols = contextCols(tableInnerWidth);
+  const hostname = (() => { try { return new URL(home.url).hostname; } catch { return home.url; } })();
+  const name = home.name ?? hostname;
+  const statusStr = isActive ? 'active' : '──────';
+
+  const cursor    = isSelected ? `{${COLORS.cyan}-fg}❯{/}` : ` `;
+  const dot       = isActive   ? `{${COLORS.green}-fg}●{/}` : `{${COLORS.textDim}-fg}○{/}`;
+  const nameColor = isSelected ? COLORS.cyan  : COLORS.textPrimary;
+  const urlColor  = isSelected ? COLORS.teal  : COLORS.textDim;
+  const statColor = isActive   ? COLORS.green : COLORS.textDim;
+
+  return (
+    ` ${cursor} ${dot}` +
+    `  {${nameColor}-fg}${pad(truncate(name, cols.name), cols.name)}{/}` +
+    `  {${urlColor}-fg}${pad(truncate(home.url, cols.url), cols.url)}{/}` +
+    `  {${statColor}-fg}${statusStr}{/}`
+  );
+}
+
+export function renderContextDetail(
+  home: HassConfig | null,
+  isActive: boolean,
+  panelInnerWidth = 30
+): string {
+  if (!home) {
+    return `\n\n{center}{${COLORS.textDim}-fg}Select a home{/}{/center}`;
+  }
+
+  const hostname = (() => { try { return new URL(home.url).hostname; } catch { return home.url; } })();
+  const name = home.name ?? hostname;
+  const w    = Math.max(16, panelInnerWidth);
+  const keyW = Math.min(10, Math.max(6, Math.floor(w * 0.38)));
+  const valW = Math.max(6, w - keyW - 1);
+  const hrLen = Math.min(26, w);
+
+  const statusLine = isActive
+    ? `{${COLORS.green}-fg}● active{/}`
+    : `{${COLORS.textDim}-fg}○ inactive{/}`;
+
+  const tokenMasked = home.token.length > 8
+    ? home.token.slice(0, 4) + '…' + home.token.slice(-4)
+    : '••••••••';
+
+  return [
+    `{bold}{${COLORS.cyan}-fg}⌂ ${truncate(name, w - 2)}{/}`,
+    `{${COLORS.border}-fg}${'─'.repeat(hrLen)}{/}`,
+    `{${COLORS.textSecondary}-fg}${'status'.padEnd(keyW)} {/}${statusLine}`,
+    `{${COLORS.textSecondary}-fg}${'name'.padEnd(keyW)} {/}{${COLORS.textPrimary}-fg}${truncate(name, valW)}{/}`,
+    `{${COLORS.textSecondary}-fg}${'host'.padEnd(keyW)} {/}{${COLORS.teal}-fg}${truncate(hostname, valW)}{/}`,
+    `{${COLORS.textSecondary}-fg}${'url'.padEnd(keyW)} {/}{${COLORS.textDim}-fg}${truncate(home.url, valW)}{/}`,
+    `{${COLORS.textSecondary}-fg}${'token'.padEnd(keyW)} {/}{${COLORS.textDim}-fg}${truncate(tokenMasked, valW)}{/}`,
+    '',
+    `{bold}{${COLORS.textSecondary}-fg}ACTIONS{/}`,
+    `{${COLORS.border}-fg}${'─'.repeat(hrLen)}{/}`,
+    `{${COLORS.green}-fg}[ENTER]{/} {${COLORS.textSecondary}-fg}Switch to this home{/}`,
+    `{${COLORS.yellow}-fg}[ESC]{/}   {${COLORS.textSecondary}-fg}Cancel{/}`,
+  ].join('\n');
+}
+
+export function renderContextStatusBar(home: HassConfig | null, isActive: boolean): string {
+  if (!home) return '';
+  const hostname = (() => { try { return new URL(home.url).hostname; } catch { return home.url; } })();
+  const name = home.name ?? hostname;
+  const statusColor = isActive ? COLORS.green : COLORS.textDim;
+  const statusLabel = isActive ? 'active' : 'inactive';
+
+  return (
+    `{${COLORS.cyan}-fg}⌂{/} ` +
+    `{${COLORS.textSecondary}-fg}context » {/}` +
+    `{${COLORS.textPrimary}-fg}${name} {/}` +
+    `{${COLORS.textDim}-fg}│ {/}` +
+    `{${statusColor}-fg}${statusLabel}{/}`
   );
 }
 
@@ -360,6 +758,10 @@ export function renderHelp(): string {
     ` ${k(':cameras')}    ${d('Cameras')}`,
     ` ${k(':vacuums')}    ${d('Vacuums')}`,
     '',
+    h('── HOMES (:command) ────────────'),
+    ` ${k(':homes')}      ${d('Open home switcher (also C, :home, :ctx)')}`,
+    ` ${k(':homes Cabin')} ${d('Switch directly to home named "Cabin"')}`,
+    '',
     h('── BULK POWER (:command) ────────'),
     ` ${k(':on')}         ${d('Turn on all in current view')}`,
     ` ${k(':off')}        ${d('Turn off all in current view')}`,
@@ -369,7 +771,7 @@ export function renderHelp(): string {
     ` ${k(':switches off')} ${d('Turn off all switches')}`,
     '',
     h('── ACTIONS ─────────────────────'),
-    ` ${k('t')}          ${d('Toggle entity')}`,
+    ` ${k('t')}          ${d('Toggle / Activate entity')}`,
     ` ${k('n')}          ${d('Rename device')}`,
     ` ${k('a')}          ${d('Assign area to device')}`,
     ` ${k('/')}          ${d('Filter entities (fuzzy)')}`,
@@ -377,7 +779,18 @@ export function renderHelp(): string {
     ` ${k('r')}          ${d('Refresh states')}`,
     ` ${k('y')}          ${d('Copy entity_id to clipboard')}`,
     ` ${k('?')}          ${d('Toggle this help')}`,
+    ` ${k('C')}          ${d('Home / context switcher  (also :homes)')}`,
     ` ${k('q / ctrl+c')} ${d('Quit')}`,
+    '',
+    h('── DEVICE CONTROLS ─────────────'),
+    ` ${k('[+/-]')}       ${d('Light: brightness  ·  Climate: temp')}`,
+    ` ${dim('          ')}  ${d('Fan: speed  ·  Media: volume  ·  Number: value')}`,
+    ` ${k('[o/c/s]')}     ${d('Cover: Open / Close / Stop')}`,
+    ` ${k('[s/h]')}       ${d('Vacuum: Start/Stop  /  Return to dock')}`,
+    ` ${k('[m]')}         ${d('Climate: cycle HVAC mode  ·  Select: next option')}`,
+    ` ${k('[[ / ]]')}     ${d('Media player: Prev / Next track')}`,
+    ` ${k('[0]')}         ${d('Alarm: Disarm')}`,
+    ` ${k('[1/2/3]')}     ${d('Alarm: Arm Away / Home / Night (alarm selected)')}`,
     '',
     '',
     dim('Press ? or ESC to close'),
@@ -440,29 +853,52 @@ function truncate(str: string, len: number): string {
 // Autocomplete helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Compute command-mode suggestions (view shortcuts, then area names after a space). */
-export function computeCommandSuggestions(buffer: string, areas: HassArea[] = []): string[] {
+/** Compute command-mode suggestions (view shortcuts, then area/home names after a space). */
+export function computeCommandSuggestions(
+  buffer: string,
+  areas: HassArea[] = [],
+  homes: HassConfig[] = []
+): string[] {
   const spaceIdx = buffer.indexOf(' ');
 
   if (spaceIdx !== -1) {
+    const viewPart = buffer.slice(0, spaceIdx).toLowerCase();
+    const queryPart = buffer.slice(spaceIdx + 1).toLowerCase();
+
+    // :ctx / :home <name> — suggest home names.
+    // Also matches partial prefixes like 'ho ', 'hom ', 'ctx' so they never fall through to area names.
+    const HOME_PREFIXES = ['home', 'homes', 'ctx', 'context'];
+    if (HOME_PREFIXES.some((p) => p.startsWith(viewPart) || viewPart.startsWith(p))) {
+      const candidates = homes.map((h) => {
+        if (h.name) return h.name;
+        try { return new URL(h.url).hostname; } catch { return h.url; }
+      });
+      const filtered = queryPart
+        ? candidates.filter((n) => n.toLowerCase().includes(queryPart))
+        : candidates;
+      return filtered.slice(0, 6).map((name) => `${viewPart} ${name}`);
+    }
+
     // After a space: suggest area names scoped to what the user typed
-    const areaQ = buffer.slice(spaceIdx + 1).toLowerCase();
-    const viewPart = buffer.slice(0, spaceIdx);
     const candidates = areas.map((a) => a.name);
-    const filtered = areaQ
-      ? candidates.filter((a) => a.toLowerCase().includes(areaQ))
+    const filtered = queryPart
+      ? candidates.filter((a) => a.toLowerCase().includes(queryPart))
       : candidates;
     const sorted = filtered.sort((a, b) => {
-      if (!areaQ) return a.localeCompare(b);
-      const aStarts = a.toLowerCase().startsWith(areaQ) ? -1 : 1;
-      const bStarts = b.toLowerCase().startsWith(areaQ) ? -1 : 1;
+      if (!queryPart) return a.localeCompare(b);
+      const aStarts = a.toLowerCase().startsWith(queryPart) ? -1 : 1;
+      const bStarts = b.toLowerCase().startsWith(queryPart) ? -1 : 1;
       return aStarts - bStarts || a.localeCompare(b);
     });
-    return sorted.slice(0, 6).map((area) => `${viewPart} ${area}`);
+    return sorted.slice(0, 6).map((area) => `${buffer.slice(0, spaceIdx)} ${area}`);
   }
 
-  // Before a space: suggest view shortcut names
-  const candidates = Object.keys(DEVICE_TYPE_SHORTCUTS).concat(['on', 'off', 'quit', 'exit']);
+  // Before a space: suggest view shortcut names + context commands
+  const CONTEXT_CMDS = new Set(['home', 'homes', 'ctx', 'context']);
+  // If the buffer is already an exact context command, it's complete — no suggestions needed.
+  if (CONTEXT_CMDS.has(buffer.toLowerCase())) return [];
+
+  const candidates = Object.keys(DEVICE_TYPE_SHORTCUTS).concat(['homes', 'ctx', 'home', 'context', 'on', 'off', 'quit', 'exit']);
   if (!buffer) return candidates.slice(0, 6);
   const q = buffer.toLowerCase();
   const prefix = candidates.filter((c) => c.toLowerCase().startsWith(q));
