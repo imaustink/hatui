@@ -142,9 +142,30 @@ export class App {
   }
 
   private renderSplash(): void {
-    this.header.setContent(
-      `{center}{bold}{${COLORS.cyan}-fg} HATUI{/} {${COLORS.magenta}-fg}─ Home Assistant TUI{/} {${COLORS.textDim}-fg}Connecting…{/}{/center}`
-    );
+    const ascii = [
+      '██╗  ██╗  ██████╗  ███╗   ███╗ ██████╗ ',
+      '██║  ██║ ██╔═══██╗ ████╗ ████║ ╚════██╗',
+      '███████║ ██║   ██║ ██╔████╔██║  █████╔╝',
+      '██╔══██║ ██║   ██║ ██║╚██╔╝██║  ╚═══██╗',
+      '██║  ██║ ╚██████╔╝ ██║ ╚═╝ ██║ ██████╔╝',
+      '╚═╝  ╚═╝  ╚═════╝  ╚═╝     ╚═╝ ╚═════╝ ',
+    ];
+
+    const items: string[] = [
+      '',
+      '',
+      ...ascii.map((l) => `{center}{bold}{${COLORS.cyan}-fg}${l}{/}{/center}`),
+      '',
+      `{center}{${COLORS.magenta}-fg}Home Assistant TUI{/}{/center}`,
+      '',
+      `{center}{${COLORS.textDim}-fg}Connecting…{/}{/center}`,
+    ];
+
+    this.header.setContent('');
+    this.table.setItems(items as unknown as string[]);
+    this.detail.setContent('');
+    this.statusBar.setContent('');
+    this.commandBar.setContent('');
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -159,7 +180,10 @@ export class App {
 
   private async switchHome(idx: number): Promise<void> {
     if (idx < 0 || idx >= this.homes.length) return;
-    if (idx === this.activeHomeIndex) return;
+    if (idx === this.activeHomeIndex) {
+      this.renderAll(); // dismiss context view without reconnecting
+      return;
+    }
 
     const home = this.homes[idx];
 
@@ -581,6 +605,15 @@ export class App {
         _ch === '\r' || _ch === '\n' ||
         (key as unknown as { sequence?: string }).sequence === '\r' ||
         (key as unknown as { sequence?: string }).sequence === '\n';
+
+      // Suppress the stray second Enter event that terminals fire after \r (or vice versa).
+      // This flag is set whenever a mode-exit is triggered by Enter so the immediately
+      // following duplicate event does not trigger an unintended action.
+      if (isEnterKey && this._suppressNextEnter) {
+        this._suppressNextEnter = false;
+        return;
+      }
+
       if (this.state.helpMode) {
         this.state.helpMode = false;
         this.helpOverlay.hide();
@@ -595,6 +628,7 @@ export class App {
         } else if (isEnterKey && this.homes.length > 0) {
           const idx = this.state.contextSelectedIndex;
           this.state.contextMode = false;
+          this._suppressNextEnter = true;
           void this.switchHome(idx);
         } else if (this.homes.length > 0 && (key.name === 'up' || key.name === 'k')) {
           this.state.contextSelectedIndex = Math.max(0, this.state.contextSelectedIndex - 1);
@@ -684,6 +718,7 @@ export class App {
             this.hideAutocomplete();
             this.renderCommandBarView();
             screen.render();
+            this._suppressNextEnter = true;
             this.openContextSwitcher();
             return;
           }
@@ -758,10 +793,6 @@ export class App {
 
       // Normal mode: Enter activates selected entity
       if (isEnterKey) {
-        if (this._suppressNextEnter) {
-          this._suppressNextEnter = false;
-          return;
-        }
         const entity = this.state.filteredEntities[this.state.selectedIndex];
         if (entity) {
           this.client.activateEntity(entity.entity_id).then((acted) => {

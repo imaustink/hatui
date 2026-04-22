@@ -347,3 +347,120 @@ describe('App – _suppressNextEnter (command Enter must not activate entity)', 
     expect((app as any)._suppressNextEnter).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// App – context switcher Enter must not activate entity
+// ─────────────────────────────────────────────────────────────────────────────
+
+function makeAppWithHomes(): { app: App; mockScreen: any; mockClient: any } {
+  const homes = [
+    { name: 'Home', url: 'http://homeassistant.local:8123', token: 'tok1' },
+    { name: 'Cabin', url: 'http://192.168.1.100:8123', token: 'tok2' },
+  ];
+
+  const mockTable = makeWidget();
+  const mockScreen = makeWidget();
+  mockScreen.render = jest.fn();
+  mockScreen.key = jest.fn();
+  mockScreen.width = 120;
+  mockScreen.height = 40;
+
+  (widgetsModule.createScreen as jest.Mock).mockReturnValue(mockScreen);
+  (widgetsModule.createTable as jest.Mock).mockReturnValue(mockTable);
+  (widgetsModule.createHeader as jest.Mock).mockReturnValue(makeWidget());
+  (widgetsModule.createDetailPanel as jest.Mock).mockReturnValue(makeWidget());
+  (widgetsModule.createCommandBar as jest.Mock).mockReturnValue(makeWidget());
+  (widgetsModule.createStatusBar as jest.Mock).mockReturnValue(makeWidget());
+  (widgetsModule.createHelpOverlay as jest.Mock).mockReturnValue(makeWidget());
+  (widgetsModule.createToast as jest.Mock).mockReturnValue(makeWidget());
+  (widgetsModule.createAutocompleteBox as jest.Mock).mockReturnValue(makeWidget());
+
+  const mockClient = Object.assign(new EventEmitter(), {
+    connected: true,
+    areas: [],
+    devices: [],
+    entityRegistry: [],
+    getEntityList: jest.fn(() => []),
+    disconnect: jest.fn(),
+    removeAllListeners: jest.fn(),
+    activateEntity: jest.fn(() => Promise.resolve(true)),
+  });
+
+  const app = new App(mockClient as unknown as HassClient, homes, 0);
+  return { app, mockScreen, mockClient };
+}
+
+describe('App – context switcher Enter must not activate entity', () => {
+  let app: App;
+  let mockScreen: any;
+  let mockClient: any;
+
+  beforeEach(() => {
+    ({ app, mockScreen, mockClient } = makeAppWithHomes());
+    const state = (app as any).state;
+    state.filteredEntities = [makeEntity('light.living_room'), makeEntity('light.bedroom')];
+    state.selectedIndex = 0;
+  });
+
+  it('opening the context switcher sets contextMode', () => {
+    app.openContextSwitcher();
+    expect((app as any).state.contextMode).toBe(true);
+  });
+
+  it('pressing Enter in context mode clears contextMode and sets _suppressNextEnter', () => {
+    app.openContextSwitcher();
+    press(mockScreen, 'enter', '\r');
+    expect((app as any).state.contextMode).toBe(false);
+    expect((app as any)._suppressNextEnter).toBe(true);
+  });
+
+  it('the stray \\n after context-switch Enter is suppressed and does not activate entity', () => {
+    app.openContextSwitcher();
+    // \r — processes the context switch
+    press(mockScreen, 'enter', '\r');
+    // \n — must be suppressed
+    press(mockScreen, 'enter', '\n');
+    expect(mockClient.activateEntity).not.toHaveBeenCalled();
+  });
+
+  it('a deliberate Enter after the suppressed one DOES activate the entity', () => {
+    app.openContextSwitcher();
+    press(mockScreen, 'enter', '\r'); // exits context mode, sets flag
+    press(mockScreen, 'enter', '\n'); // suppressed stray \n
+    press(mockScreen, 'enter', '\r'); // deliberate activation
+    expect(mockClient.activateEntity).toHaveBeenCalledWith('light.living_room');
+  });
+
+  it('full double-fire scenario: \\r exits context mode, \\n is suppressed', () => {
+    const state = (app as any).state;
+    app.openContextSwitcher();
+    state.contextSelectedIndex = 0; // selecting same home
+    press(mockScreen, 'enter', '\r');
+    press(mockScreen, 'enter', '\n');
+    expect(mockClient.activateEntity).not.toHaveBeenCalled();
+    expect(state.contextMode).toBe(false);
+  });
+
+  it('Escape to close context mode does NOT set _suppressNextEnter', () => {
+    app.openContextSwitcher();
+    press(mockScreen, 'escape', '');
+    expect((app as any)._suppressNextEnter).toBe(false);
+    // Enter after Escape should work normally
+    press(mockScreen, 'enter', '\r');
+    expect(mockClient.activateEntity).toHaveBeenCalledWith('light.living_room');
+  });
+
+  it(':homes enter opens context view and stray \\n does not immediately close it', () => {
+    const state = (app as any).state;
+    state.commandMode = true;
+    state.commandBuffer = 'homes';
+    // \r — processes the :homes command, opens context switcher
+    press(mockScreen, 'enter', '\r');
+    expect(state.contextMode).toBe(true);
+    // \n — stray double-fire must NOT close the context view
+    press(mockScreen, 'enter', '\n');
+    expect(state.contextMode).toBe(true);
+    expect(mockClient.activateEntity).not.toHaveBeenCalled();
+  });
+});
+

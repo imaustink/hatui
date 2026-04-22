@@ -30,7 +30,7 @@ export function createScreen(): blessed.Widgets.Screen {
   return blessed.screen({
     smartCSR: true,
     fullUnicode: true,
-    title: 'HATUI – Home Assistant TUI',
+    title: 'HOM3 – Home Assistant TUI',
     dockBorders: true,
     forceUnicode: true,
     cursor: {

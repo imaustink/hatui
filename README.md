@@ -1,15 +1,17 @@
-# HATUI
+# HOM3
 
-> k9s-inspired terminal UI for Home Assistant
+k9s-inspired terminal UI for Home Assistant
 
 ```
-██╗  ██╗ █████╗ ████████╗██╗   ██╗██╗
-██║  ██║██╔══██╗╚══██╔══╝██║   ██║██║
-███████║███████║   ██║   ██║   ██║██║
-██╔══██║██╔══██║   ██║   ██║   ██║██║
-██║  ██║██║  ██║   ██║   ╚██████╔╝██║
-╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝
+██╗  ██╗  ██████╗  ███╗   ███╗ ██████╗ 
+██║  ██║ ██╔═══██╗ ████╗ ████║ ╚════██╗
+███████║ ██║   ██║ ██╔████╔██║  █████╔╝
+██╔══██║ ██║   ██║ ██║╚██╔╝██║  ╚═══██╗
+██║  ██║ ╚██████╔╝ ██║ ╚═╝ ██║ ██████╔╝
+╚═╝  ╚═╝  ╚═════╝  ╚═╝     ╚═╝ ╚═════╝ 
 ```
+
+![HOM3 Screenshot](img/app.png)
 
 Navigate your entire Home Assistant setup from the terminal — just like `k9s` for Kubernetes.
 
@@ -19,9 +21,11 @@ Navigate your entire Home Assistant setup from the terminal — just like `k9s` 
 
 - **Resource-based navigation** — jump to any device type with `:lights`, `:sensors`, `:climate`, etc.
 - **Live state streaming** — subscribes to HA WebSocket, updates in real-time
+- **Area filtering** — filter by area with `:lights kitchen` or use the area selector in the header
 - **Fuzzy filter** — press `/` to filter entities by name, entity_id, or state
-- **Toggle** — press `t` to toggle lights, switches, fans, locks, and more
-- **Detail panel** — attributes, actions, and timing for the selected entity
+- **Toggle & control** — `t` toggles lights/switches/fans/locks; `+`/`-` adjusts brightness, temperature, volume
+- **Detail panel** — attributes, domain-specific controls, and timing for the selected entity
+- **Multi-home context switching** — manage multiple HA instances and switch between them with `C` or `:homes`
 - **Cyberpunk/synthwave theme** — cyan, magenta, neon green on dark
 
 ---
@@ -30,16 +34,21 @@ Navigate your entire Home Assistant setup from the terminal — just like `k9s` 
 
 ```bash
 # 1. Clone & install
-git clone https://github.com/you/hatui
-cd hatui
+git clone https://github.com/you/hom3
+cd hom3
 npm install
 
 # 2. Configure
-mkdir -p ~/.config/hatui
-cat > ~/.config/hatui/config.json << 'EOF'
+mkdir -p ~/.config/hom3
+cat > ~/.config/hom3/config.json << 'EOF'
 {
-  "url": "http://homeassistant.local:8123",
-  "token": "your_long_lived_access_token"
+  "homes": [
+    {
+      "name": "Home",
+      "url": "http://homeassistant.local:8123",
+      "token": "your_long_lived_access_token"
+    }
+  ]
 }
 EOF
 
@@ -62,11 +71,17 @@ Get a token: **HA → Profile → Long-Lived Access Tokens**
 | `g` / `Home` | Jump to top |
 | `G` / `End` | Jump to bottom |
 | `PgUp` / `PgDn` | Page up/down |
+| `Enter` | Activate selected entity |
 | `:` | Open command mode |
 | `/` | Filter (fuzzy search) |
 | `t` | Toggle selected entity |
+| `+` / `-` | Adjust brightness, temperature, volume, etc. |
+| `d` | Toggle detail panel |
+| `n` | Rename selected entity |
+| `a` | Set area for selected entity |
 | `r` | Refresh all states |
-| `?` | Toggle help |
+| `C` | Open context switcher (multi-home) |
+| `?` | Toggle help overlay |
 | `q` / `Ctrl+C` | Quit |
 
 ---
@@ -98,7 +113,60 @@ Type `:` then any of the following:
 | `:numbers` | Number inputs |
 | `:selects` | Select inputs |
 | `:inputs` | Input helpers |
+| `:homes` / `:ctx` | Context switcher (multi-home) |
 | `:quit` | Quit |
+
+Append an area name to scope a view: `:lights kitchen`, `:sensors bedroom`
+
+---
+
+## Multi-Home Context Switching
+
+HOM3 supports multiple Home Assistant instances, similar to how k9s handles multiple Kubernetes clusters.
+
+**Open the context switcher** with `C` or `:homes` — the main table switches to a `contexts` view listing all configured homes. Navigate with `j`/`k`, press `Enter` to connect, `Esc` to cancel.
+
+The active home name is shown as a badge in the header (top-right of the title bar).
+
+---
+
+## Configuration
+
+HOM3 loads config in this order of precedence:
+
+| Source | Variables / Flags |
+|--------|-------------------|
+| CLI flags | `--url`, `--token`, `--name` |
+| Environment variables | `HASS_URL`, `HASS_TOKEN`, `HASS_NAME` |
+| Config file | `~/.config/hom3/config.json` |
+
+### Single home
+
+```json
+{
+  "url": "http://homeassistant.local:8123",
+  "token": "your_long_lived_access_token"
+}
+```
+
+### Multiple homes
+
+```json
+{
+  "homes": [
+    {
+      "name": "Home",
+      "url": "http://homeassistant.local:8123",
+      "token": "your_long_lived_access_token"
+    },
+    {
+      "name": "Cabin",
+      "url": "http://192.168.1.100:8123",
+      "token": "another_token"
+    }
+  ]
+}
+```
 
 ---
 
@@ -115,22 +183,3 @@ src/
 └── types.ts        # TypeScript types
 ```
 
----
-
-## Configuration
-
-HATUI loads config in this order of precedence:
-
-| Source | Example |
-|--------|---------|
-| CLI flags | `--url http://homeassistant.local:8123 --token <token>` |
-| Environment variables | `HASS_URL=...` `HASS_TOKEN=...` |
-| Config file | `~/.config/hatui/config.json` |
-
-```json
-// ~/.config/hatui/config.json
-{
-  "url": "http://homeassistant.local:8123",
-  "token": "your_long_lived_access_token"
-}
-```

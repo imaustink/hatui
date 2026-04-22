@@ -7,10 +7,10 @@ import { HassConfig, HassConfigFile } from './types';
 import { parseCliArgs, runCli } from './cli';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Load config: CLI flags → env vars → ~/.config/hatui/config.json
+// Load config: CLI flags → env vars → ~/.config/hom3/config.json
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CONFIG_PATH = path.resolve(process.env['HOME'] ?? '~', '.config', 'hatui', 'config.json');
+const CONFIG_PATH = path.resolve(process.env['HOME'] ?? '~', '.config', 'hom3', 'config.json');
 
 function normalizeUrl(raw: string): string {
   let u = raw.trim();
@@ -103,28 +103,28 @@ function getConfigData(): ConfigResult {
 
 function printUsage(): void {
   console.log(`
-  ${'\x1b[96m'}HATUI${'\x1b[0m'} – k9s-inspired Home Assistant TUI
+  ${'\x1b[96m'}HOM3${'\x1b[0m'} – k9s-inspired Home Assistant TUI
 
   ${'\x1b[2m'}Usage (interactive TUI):${'\x1b[0m'}
-    hatui [--url <url>] [--token <token>] [--name <name>]
+    hom3 [--url <url>] [--token <token>] [--name <name>]
 
   ${'\x1b[2m'}Usage (one-off commands):${'\x1b[0m'}
-    hatui get entities  [--domain <type>] [--search <text>] [--area <name>] [-o table|wide|json]
-    hatui get entity    <entity_id>       [-o table|json]
-    hatui get areas     [-o table|json]
-    hatui get devices   [-o table|json]
-    hatui toggle        <entity_id>
-    hatui toggle        --area <name> [--domain <domain>]
-    hatui turn-on       <entity_id>
-    hatui turn-on       --area <name> [--domain <domain>]
-    hatui turn-off      <entity_id>
-    hatui turn-off      --area <name> [--domain <domain>]
-    hatui call          <domain> <service> [--entity <id>] [--data <json>]
+    hom3 get entities  [--domain <type>] [--search <text>] [--area <name>] [-o table|wide|json]
+    hom3 get entity    <entity_id>       [-o table|json]
+    hom3 get areas     [-o table|json]
+    hom3 get devices   [-o table|json]
+    hom3 toggle        <entity_id>
+    hom3 toggle        --area <name> [--domain <domain>]
+    hom3 turn-on       <entity_id>
+    hom3 turn-on       --area <name> [--domain <domain>]
+    hom3 turn-off      <entity_id>
+    hom3 turn-off      --area <name> [--domain <domain>]
+    hom3 call          <domain> <service> [--entity <id>] [--data <json>]
 
   ${'\x1b[2m'}Area examples:${'\x1b[0m'}
-    hatui turn-off --area "Living Room"           # turn off all lights
-    hatui turn-off --area kitchen --domain switch  # turn off switches
-    hatui turn-on  --area bedroom                 # partial name match
+    hom3 turn-off --area "Living Room"           # turn off all lights
+    hom3 turn-off --area kitchen --domain switch  # turn off switches
+    hom3 turn-on  --area bedroom                 # partial name match
 
   ${'\x1b[2m'}Domain shortcuts for --domain:${'\x1b[0m'}
     lights, switches, sensors, bs (binary_sensors), climate, covers,
@@ -133,7 +133,7 @@ function printUsage(): void {
   ${'\x1b[2m'}Configuration (in order of precedence):${'\x1b[0m'}
     1. CLI flags:   --url http://homeassistant.local:8123 --token <token> --name "Home"
     2. Environment: HASS_URL=...  HASS_TOKEN=...  HASS_NAME=...
-    3. Config file: ~/.config/hatui/config.json
+    3. Config file: ~/.config/hom3/config.json
 
   ${'\'\x1b[2m\''}Config file format (single home):\'\x1b[0m\'}
     {

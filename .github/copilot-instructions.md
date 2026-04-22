@@ -1,8 +1,8 @@
-# HATUI – Copilot Instructions
+# HOM3 – Copilot Instructions
 
 ## Project Overview
 
-**HATUI** is a k9s-inspired terminal UI (TUI) for Home Assistant, written in TypeScript and running on Node.js. It is typically deployed on a Raspberry Pi as a always-on dashboard. The UI is rendered entirely in the terminal using the **blessed** library.
+**HOM3** is a k9s-inspired terminal UI (TUI) for Home Assistant, written in TypeScript and running on Node.js. It is typically deployed on a Raspberry Pi as a always-on dashboard. The UI is rendered entirely in the terminal using the **blessed** library.
 
 ---
 
@@ -12,7 +12,7 @@
 |---|---|---|
 | TUI rendering | `blessed` ^0.1.81 | Box/list widgets, tags-based color markup |
 | HA connection | Raw WebSocket (`ws`) | Custom protocol over HA WebSocket API |
-| Config loading | `dotenv` | `.env` file or `~/.config/hatui/config.json` |
+| Config loading | `dotenv` | `.env` file or `~/.config/hom3/config.json` |
 | HTTP (unused currently) | `axios` | Available as a dependency |
 | Language | TypeScript (strict) | Target ES2020, CommonJS output |
 | Runtime | Node.js | Entry: `dist/index.js` |
@@ -152,7 +152,7 @@ Edit `renderDetail()` in `renderer.ts`. Add lines to the `lines` array using `ke
 1. CLI flags: `--url <url> --token <token>`
 2. Environment variables: `HASS_URL` / `HA_URL`, `HASS_TOKEN` / `HA_TOKEN`
 3. `.env` file in the working directory
-4. `~/.config/hatui/config.json` → `{ "url": "…", "token": "…" }`
+4. `~/.config/hom3/config.json` → `{ "url": "…", "token": "…" }`
 
 ---
 

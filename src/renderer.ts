@@ -734,7 +734,7 @@ export function renderHelp(): string {
   const dim = (s: string) => `{${COLORS.textDim}-fg}${s}{/}`;
 
   return [
-    `{center}{bold}{${COLORS.magenta}-fg}  HATUI – Home Assistant TUI  {/}{/center}`,
+    `{center}{bold}{${COLORS.magenta}-fg}  HOM3 – Home Assistant TUI  {/}{/center}`,
     `{center}{${COLORS.textDim}-fg}k9s-inspired terminal UI{/}{/center}`,
     '',
     h('── NAVIGATION ──────────────────'),

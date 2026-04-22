@@ -6,7 +6,7 @@ export interface HassConfig {
 }
 
 /**
- * Shape of ~/.config/hatui/config.json.
+ * Shape of ~/.config/hom3/config.json.
  * Supports both single-home (legacy) and multi-home formats.
  */
 export interface HassConfigFile {

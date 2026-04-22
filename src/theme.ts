@@ -1,4 +1,4 @@
-// HATUI Color Palette - Cyberpunk/Synthwave inspired
+// HOM3 Color Palette - Cyberpunk/Synthwave inspired
 export const COLORS = {
   // Primary palette
   bg:           '#0d0d1a',

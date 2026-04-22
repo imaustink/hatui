@@ -1,10 +1,10 @@
 {
-  "name": "hatui",
+  "name": "hom3",
   "version": "1.0.0",
   "description": "k9s-inspired TUI for Home Assistant",
   "main": "dist/index.js",
   "bin": {
-    "hatui": "./dist/index.js"
+    "hom3": "./dist/index.js"
   },
   "scripts": {
     "dev": "ts-node src/index.ts",
@@ -17,20 +17,27 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.ts"],
+    "testMatch": [
+      "**/tests/**/*.test.ts"
+    ],
     "globals": {
       "ts-jest": {
         "tsconfig": "tsconfig.test.json"
       }
     },
-    "collectCoverageFrom": ["src/**/*.ts", "!src/index.ts", "!src/app.ts", "!src/widgets.ts"]
+    "collectCoverageFrom": [
+      "src/**/*.ts",
+      "!src/index.ts",
+      "!src/app.ts",
+      "!src/widgets.ts"
+    ]
   },
   "keywords": [
     "home-assistant",
     "tui",
     "terminal"
   ],
-  "author": "",
+  "author": "Austin Kurpuis <a@kurpuis.com>",
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {

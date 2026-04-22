@@ -314,7 +314,7 @@ export async function runCli(client: HassClient, args: CliArgs): Promise<void> {
 
         if (resource === 'entity') {
           if (!args.target) {
-            console.error(`${A.red}error: usage: hatui get entity <entity_id>${A.reset}`);
+            console.error(`${A.red}error: usage: hom3 get entity <entity_id>${A.reset}`);
             process.exitCode = 1;
             return;
           }
@@ -385,8 +385,8 @@ export async function runCli(client: HassClient, args: CliArgs): Promise<void> {
         }
         const entityId = args.resource;
         if (!entityId) {
-          console.error(`${A.red}error: usage: hatui toggle <entity_id>${A.reset}`);
-          console.error(`       or:     hatui toggle --area <name> [--domain <domain>]`);
+          console.error(`${A.red}error: usage: hom3 toggle <entity_id>${A.reset}`);
+          console.error(`       or:     hom3 toggle --area <name> [--domain <domain>]`);
           process.exitCode = 1;
           return;
         }
@@ -411,8 +411,8 @@ export async function runCli(client: HassClient, args: CliArgs): Promise<void> {
         }
         const entityId = args.resource;
         if (!entityId) {
-          console.error(`${A.red}error: usage: hatui turn-on <entity_id>${A.reset}`);
-          console.error(`       or:     hatui turn-on --area <name> [--domain <domain>]`);
+          console.error(`${A.red}error: usage: hom3 turn-on <entity_id>${A.reset}`);
+          console.error(`       or:     hom3 turn-on --area <name> [--domain <domain>]`);
           process.exitCode = 1;
           return;
         }
@@ -437,8 +437,8 @@ export async function runCli(client: HassClient, args: CliArgs): Promise<void> {
         }
         const entityId = args.resource;
         if (!entityId) {
-          console.error(`${A.red}error: usage: hatui turn-off <entity_id>${A.reset}`);
-          console.error(`       or:     hatui turn-off --area <name> [--domain <domain>]`);
+          console.error(`${A.red}error: usage: hom3 turn-off <entity_id>${A.reset}`);
+          console.error(`       or:     hom3 turn-off --area <name> [--domain <domain>]`);
           process.exitCode = 1;
           return;
         }
@@ -453,7 +453,7 @@ export async function runCli(client: HassClient, args: CliArgs): Promise<void> {
         const service = args.target;
         if (!domain || !service) {
           console.error(
-            `${A.red}error: usage: hatui call <domain> <service> [--entity <id>] [--data <json>]${A.reset}`,
+            `${A.red}error: usage: hom3 call <domain> <service> [--entity <id>] [--data <json>]${A.reset}`,
           );
           process.exitCode = 1;
           return;
@@ -485,7 +485,7 @@ export async function runCli(client: HassClient, args: CliArgs): Promise<void> {
       // ── unknown ──────────────────────────────────────────────────────────
       default:
         console.error(`${A.red}error: unknown command: ${args.subcommand}${A.reset}`);
-        console.error(`Run ${A.cyan}hatui --help${A.reset} for usage.`);
+        console.error(`Run ${A.cyan}hom3 --help${A.reset} for usage.`);
         process.exitCode = 1;
     }
   } finally {

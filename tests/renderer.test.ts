@@ -557,7 +557,7 @@ describe('renderStatusBar', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('renderHeader', () => {
-  it('contains HATUI branding', () => {
+  it('contains HOM3 branding', () => {
     const state = makeState({ filteredEntities: allEntities });
     const result = renderHeader(state, 120);
     expect(result).toContain('HA');
